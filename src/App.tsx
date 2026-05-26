@@ -13,8 +13,8 @@ import {
 const MAP_W = 2000;
 const MAP_H = 925;
 const AVATAR_R = 24; // radius px
-const HEARING_RADIUS = 280; // px — open-floor proximity range
-const HEARING_FULL = 80; // px — open-floor full-volume range
+const HEARING_RADIUS = 130; // px — open-floor proximity range (where audio drops to zero)
+const HEARING_FULL = 45;    // px — open-floor full-volume range
 const SPEED = 280; // px/sec
 const POS_BROADCAST_HZ = 12; // position sends per second
 const KEEPALIVE_MS = 5000; // re-broadcast position every 5s (so late joiners see us)
@@ -90,7 +90,17 @@ interface PeerInfo {
 
 type Signal =
   | { type: 'pos'; from: string; fromName: string; x: number; y: number }
-  | { type: 'wave'; from: string; fromName: string; to: string };
+  | { type: 'wave'; from: string; fromName: string; to: string }
+  | { type: 'chat'; from: string; fromName: string; text: string; ts: number };
+
+interface ChatMessage {
+  id: string;
+  from: string;
+  fromName: string;
+  text: string;
+  ts: number;
+  mine: boolean;
+}
 
 // ──────────────────────────────────────────────
 // Identity
@@ -145,6 +155,19 @@ export default function App() {
   // Wave UI
   const [waveToast, setWaveToast] = useState<{ name: string; at: number } | null>(null);
   const [waveMenuFor, setWaveMenuFor] = useState<string | null>(null);
+
+  // Right-side panels (mutually exclusive)
+  const [panel, setPanel] = useState<'none' | 'people' | 'chat'>('none');
+
+  // Chat
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatUnread, setChatUnread] = useState(0);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // Highlight peer (used by Locate-on-map). Camera fits whole map already, so we
+  // just pulse a ring around the target avatar for a few seconds.
+  const [highlightPeerId, setHighlightPeerId] = useState<string | null>(null);
 
   // ──────────────────────────────────────────────
   // Refs
@@ -221,6 +244,26 @@ export default function App() {
         audio.play().catch((e) => console.warn('wave play blocked', e));
       } catch {}
       setWaveToast({ name: msg.fromName, at: Date.now() });
+    } else if (msg.type === 'chat') {
+      const mine = msg.from === myIdentityRef.current;
+      setChatMessages((prev) => [
+        ...prev.slice(-99),
+        {
+          id: `${msg.from}-${msg.ts}-${Math.random().toString(36).slice(2, 6)}`,
+          from: msg.from,
+          fromName: msg.fromName,
+          text: msg.text,
+          ts: msg.ts,
+          mine,
+        },
+      ]);
+      // unread badge if panel not open + not mine
+      if (!mine) {
+        setPanel((p) => {
+          if (p !== 'chat') setChatUnread((u) => u + 1);
+          return p;
+        });
+      }
     }
   }, []);
 
@@ -265,18 +308,32 @@ export default function App() {
           }
         });
 
-        room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, _pub, participant) => {
+        room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, pub, participant) => {
           if (track.kind === Track.Kind.Audio) {
+            // Defensive: remove any orphaned audio elements for this peer that didn't
+            // get cleaned up by a prior TrackUnsubscribed (race condition when leaving
+            // one zone and entering another quickly).
+            document
+              .querySelectorAll(`audio[data-peer-id="${participant.identity}"]`)
+              .forEach((n) => n.remove());
+
             const el = track.attach() as HTMLAudioElement;
-            el.id = `audio-${participant.identity}`;
+            el.id = `audio-${participant.identity}-${pub.trackSid}`;
+            el.dataset.peerId = participant.identity;
             el.autoplay = true;
-            el.volume = 0;
+            // Initial volume: compute from CURRENT proximity so we don't have a
+            // silent gap until the next tick.
+            el.volume = computeVolumeFor(participant.identity);
             document.body.appendChild(el);
           }
         });
 
-        room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
+        room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack, _pub, participant) => {
           track.detach().forEach((el) => el.remove());
+          // Belt + suspenders: remove any leftover audio elements tagged for this peer.
+          document
+            .querySelectorAll(`audio[data-peer-id="${participant.identity}"]`)
+            .forEach((n) => n.remove());
         });
 
         room.on(RoomEvent.TrackPublished, (pub: RemoteTrackPublication, participant) => {
@@ -351,43 +408,37 @@ export default function App() {
   // ──────────────────────────────────────────────
   // Proximity audio engine
   // ──────────────────────────────────────────────
+  // Shared rule: given my pos and the peer's pos, what volume (0..1) should I hear them at?
+  // Rule:
+  //  - If EITHER of us is in any zone → only same-zone members hear each other (full volume)
+  //  - If both are on open floor → distance attenuation (full inside HEARING_FULL, linear to 0 at HEARING_RADIUS)
+  const computeVolumeFor = useCallback((peerId: string): number => {
+    const me = myPosRef.current;
+    const peer = peersRef.current.get(peerId);
+    if (!peer) return 0;
+    const myZone = getZoneId(me.x, me.y);
+    const peerZone = getZoneId(peer.x, peer.y);
+    if (myZone !== null || peerZone !== null) {
+      return myZone !== null && myZone === peerZone ? 1.0 : 0.0;
+    }
+    const d = Math.hypot(me.x - peer.x, me.y - peer.y);
+    if (d >= HEARING_RADIUS) return 0;
+    if (d <= HEARING_FULL) return 1.0;
+    return Math.max(0, 1 - (d - HEARING_FULL) / (HEARING_RADIUS - HEARING_FULL));
+  }, []);
+
   const updateProximityAudio = useCallback(() => {
     const r = roomRef.current;
     if (!r) return;
 
-    const me = myPosRef.current;
-    const myZone = getZoneId(me.x, me.y);
     let anyoneAudible = false;
 
-    peersRef.current.forEach((peer, id) => {
+    peersRef.current.forEach((_peer, id) => {
       const remote = r.remoteParticipants.get(id);
       if (!remote) return;
 
-      const peerZone = getZoneId(peer.x, peer.y);
-
-      // ── Determine if I should hear this peer + at what volume
-      // Rule:
-      //  - If I'm in any zone OR peer is in any zone → only same-zone members hear each other
-      //  - Inside the same zone, audio is FULL volume (no distance falloff)
-      //  - If both of us are in the open floor → distance-based proximity
-      let audible = false;
-      let volume = 0;
-
-      if (myZone !== null || peerZone !== null) {
-        if (myZone !== null && myZone === peerZone) {
-          audible = true;
-          volume = 1.0;
-        } else {
-          audible = false;
-        }
-      } else {
-        const d = Math.hypot(me.x - peer.x, me.y - peer.y);
-        if (d < HEARING_RADIUS) {
-          audible = true;
-          if (d <= HEARING_FULL) volume = 1.0;
-          else volume = Math.max(0, 1 - (d - HEARING_FULL) / (HEARING_RADIUS - HEARING_FULL));
-        }
-      }
+      const volume = computeVolumeFor(id);
+      const audible = volume > 0;
 
       const was = subscribedRef.current.has(id);
       if (audible && !was) {
@@ -400,8 +451,11 @@ export default function App() {
 
       if (audible) {
         anyoneAudible = true;
-        const el = document.getElementById(`audio-${id}`) as HTMLAudioElement | null;
-        if (el) el.volume = volume;
+        // Use querySelectorAll so we update every audio element for this peer,
+        // not just the first one found by id (handles stale-element races).
+        document
+          .querySelectorAll<HTMLAudioElement>(`audio[data-peer-id="${id}"]`)
+          .forEach((el) => { el.volume = volume; });
       }
     });
 
@@ -409,7 +463,7 @@ export default function App() {
     if (r.localParticipant.isMicrophoneEnabled !== want) {
       r.localParticipant.setMicrophoneEnabled(want).catch(() => {});
     }
-  }, []);
+  }, [computeVolumeFor]);
 
   // ──────────────────────────────────────────────
   // Main loop: movement + proximity
@@ -468,6 +522,20 @@ export default function App() {
     return () => clearTimeout(t);
   }, [waveToast]);
 
+  // Chat auto-scroll to bottom on new messages
+  useEffect(() => {
+    if (panel !== 'chat') return;
+    const el = chatScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chatMessages, panel]);
+
+  // Auto-clear locate-highlight after 4 seconds
+  useEffect(() => {
+    if (!highlightPeerId) return;
+    const t = setTimeout(() => setHighlightPeerId(null), 4000);
+    return () => clearTimeout(t);
+  }, [highlightPeerId]);
+
   // ──────────────────────────────────────────────
   // Actions
   // ──────────────────────────────────────────────
@@ -496,6 +564,47 @@ export default function App() {
     const data = new TextEncoder().encode(JSON.stringify(msg));
     await r.localParticipant.publishData(data, { reliable: true });
   }, [name]);
+
+  const sendChat = useCallback(async () => {
+    const text = chatInput.trim();
+    if (!text) return;
+    const r = roomRef.current;
+    if (!r) return;
+    const ts = Date.now();
+    const msg: Signal = {
+      type: 'chat',
+      from: myIdentityRef.current,
+      fromName: name,
+      text,
+      ts,
+    };
+    // Echo locally so I see my own message instantly (server doesn't reflect own data)
+    setChatMessages((prev) => [
+      ...prev.slice(-99),
+      { id: `me-${ts}`, from: myIdentityRef.current, fromName: name, text, ts, mine: true },
+    ]);
+    setChatInput('');
+    try {
+      const data = new TextEncoder().encode(JSON.stringify(msg));
+      await r.localParticipant.publishData(data, { reliable: true });
+    } catch (e) {
+      console.warn('chat send failed', e);
+    }
+  }, [chatInput, name]);
+
+  const openPanel = useCallback((p: 'people' | 'chat') => {
+    setPanel((cur) => {
+      const next = cur === p ? 'none' : p;
+      if (next === 'chat') setChatUnread(0);
+      return next;
+    });
+  }, []);
+
+  const locateOnMap = useCallback((peerId: string) => {
+    setHighlightPeerId(peerId);
+    setPanel('none');
+    setWaveMenuFor(null);
+  }, []);
 
   // ──────────────────────────────────────────────
   // Render: name entry
@@ -609,6 +718,7 @@ export default function App() {
               color={colorFor(p.identity)}
               near={near}
               zoneName={peerZone?.name ?? null}
+              highlight={highlightPeerId === p.identity}
               onClick={() => setWaveMenuFor(waveMenuFor === p.identity ? null : p.identity)}
               menuOpen={waveMenuFor === p.identity}
               onCloseMenu={() => setWaveMenuFor(null)}
@@ -616,6 +726,7 @@ export default function App() {
                 sendWave(p.identity);
                 setWaveMenuFor(null);
               }}
+              onLocate={() => locateOnMap(p.identity)}
             />
           );
         })}
@@ -710,18 +821,61 @@ export default function App() {
 
         {/* Right: people / chat / exit */}
         <div className="flex items-center gap-3 text-gray-400">
-          <button className="hover:text-white p-2" title="Calendar">
+          <button className="hover:text-white p-2 opacity-50 cursor-not-allowed" title="Calendar (coming soon)" disabled>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zM9 14H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2z"/></svg>
           </button>
-          <button className="hover:text-white p-2 relative" title="Chat">
+          <button
+            className={`p-2 relative transition rounded ${panel === 'chat' ? 'text-white bg-white/10' : 'hover:text-white'}`}
+            title="Chat"
+            onClick={() => openPanel('chat')}
+          >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+            {chatUnread > 0 && panel !== 'chat' && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                {chatUnread > 9 ? '9+' : chatUnread}
+              </span>
+            )}
           </button>
-          <button className="hover:text-white p-2 flex items-center gap-1" title="People">
+          <button
+            className={`p-2 flex items-center gap-1 transition rounded ${panel === 'people' ? 'text-white bg-white/10' : 'hover:text-white'}`}
+            title="People"
+            onClick={() => openPanel('people')}
+          >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
             <span className="text-sm">{peers.size + 1}</span>
           </button>
         </div>
       </div>
+
+      {/* Right-side slide-in panels (People / Chat) */}
+      {panel !== 'none' && (
+        <SidePanel
+          title={panel === 'people' ? `People · ${peers.size + 1}` : 'Chat'}
+          onClose={() => setPanel('none')}
+          topInset={48 /* TOP_BAR_H */}
+          bottomInset={64 /* BOTTOM_BAR_H */}
+        >
+          {panel === 'people' ? (
+            <PeopleList
+              self={{ identity: myIdentityRef.current, name, x: myPos.x, y: myPos.y }}
+              peers={peers}
+              myZoneId={myZoneId}
+              onLocate={locateOnMap}
+              onWave={(id) => sendWave(id)}
+              colorFor={colorFor}
+            />
+          ) : (
+            <ChatView
+              messages={chatMessages}
+              input={chatInput}
+              setInput={setChatInput}
+              onSend={sendChat}
+              scrollRef={chatScrollRef}
+              colorFor={colorFor}
+            />
+          )}
+        </SidePanel>
+      )}
 
       {/* Error */}
       {error && (
@@ -794,16 +948,19 @@ interface AvatarProps {
   color: string;
   isMe?: boolean;
   near?: boolean;
+  highlight?: boolean;
   showHearingRing?: boolean;
   zoneName?: string | null;
   onClick?: () => void;
   menuOpen?: boolean;
   onWave?: () => void;
+  onLocate?: () => void;
   onCloseMenu?: () => void;
 }
 
 function Avatar({
-  x, y, name, color, isMe, near, showHearingRing, zoneName, onClick, menuOpen, onWave, onCloseMenu,
+  x, y, name, color, isMe, near, highlight, showHearingRing, zoneName,
+  onClick, menuOpen, onWave, onLocate, onCloseMenu,
 }: AvatarProps) {
   return (
     <div
@@ -813,7 +970,11 @@ function Avatar({
         top: y - AVATAR_R,
         width: AVATAR_R * 2,
         height: AVATAR_R * 2,
-        transition: 'left 80ms linear, top 80ms linear',
+        // Local avatar updates every animation frame (60fps) — a CSS transition
+        // would be restarted each frame and cause stair-step jitter.
+        // Peer avatars get position updates ~12Hz; transition smooths them.
+        transition: isMe ? 'none' : 'left 80ms linear, top 80ms linear',
+        willChange: 'left, top',
       }}
     >
       {showHearingRing && (
@@ -824,6 +985,20 @@ function Avatar({
             top: AVATAR_R - HEARING_RADIUS,
             width: HEARING_RADIUS * 2,
             height: HEARING_RADIUS * 2,
+          }}
+        />
+      )}
+
+      {highlight && (
+        <div
+          className="absolute rounded-full pointer-events-none animate-ping"
+          style={{
+            left: -AVATAR_R * 0.5,
+            top: -AVATAR_R * 0.5,
+            width: AVATAR_R * 3,
+            height: AVATAR_R * 3,
+            border: '4px solid #fbbf24',
+            boxShadow: '0 0 24px #fbbf24',
           }}
         />
       )}
@@ -907,7 +1082,7 @@ function Avatar({
 
             <div className="border-t border-white/10 pt-2 space-y-0.5">
               <MenuItem icon="👤" label="View profile" disabled />
-              <MenuItem icon="📍" label="Locate on map" disabled />
+              <MenuItem icon="📍" label="Locate on map" onClick={onLocate} />
               <MenuItem icon="👣" label="Follow" disabled />
               <MenuItem icon="🚪" label="Request to join me" disabled />
             </div>
@@ -918,10 +1093,21 @@ function Avatar({
   );
 }
 
-function MenuItem({ icon, label, disabled }: { icon: string; label: string; disabled?: boolean }) {
+function MenuItem({
+  icon,
+  label,
+  disabled,
+  onClick,
+}: {
+  icon: string;
+  label: string;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
   return (
     <button
       disabled={disabled}
+      onClick={onClick}
       className={`w-full flex items-center gap-3 px-2 py-2 rounded-lg text-sm ${
         disabled ? 'text-gray-500 cursor-not-allowed' : 'text-white hover:bg-white/5'
       }`}
@@ -929,5 +1115,200 @@ function MenuItem({ icon, label, disabled }: { icon: string; label: string; disa
       <span className="w-5 text-center text-gray-400">{icon}</span>
       <span>{label}</span>
     </button>
+  );
+}
+
+// ──────────────────────────────────────────────
+// SidePanel — right-side slide-in for People / Chat
+// ──────────────────────────────────────────────
+function SidePanel({
+  title,
+  onClose,
+  topInset,
+  bottomInset,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  topInset: number;
+  bottomInset: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="fixed right-0 w-80 bg-[#0e1320]/95 backdrop-blur border-l border-white/5 flex flex-col z-30 text-white shadow-2xl"
+      style={{ top: topInset, bottom: bottomInset }}
+    >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
+        <h2 className="font-semibold text-sm">{title}</h2>
+        <button
+          onClick={onClose}
+          className="text-gray-400 hover:text-white text-xl leading-none w-6 h-6 flex items-center justify-center"
+          title="Close"
+        >
+          ×
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto">{children}</div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// PeopleList — directory of self + peers
+// ──────────────────────────────────────────────
+function PeopleList({
+  self,
+  peers,
+  myZoneId,
+  onLocate,
+  onWave,
+  colorFor,
+}: {
+  self: { identity: string; name: string; x: number; y: number };
+  peers: Map<string, PeerInfo>;
+  myZoneId: string | null;
+  onLocate: (id: string) => void;
+  onWave: (id: string) => void;
+  colorFor: (id: string) => string;
+}) {
+  const rows: Array<{ id: string; name: string; x: number; y: number; zoneId: string | null; mine: boolean }> = [];
+  rows.push({ id: self.identity, name: self.name, x: self.x, y: self.y, zoneId: myZoneId, mine: true });
+  peers.forEach((p) => rows.push({
+    id: p.identity,
+    name: p.name,
+    x: p.x,
+    y: p.y,
+    zoneId: getZoneId(p.x, p.y),
+    mine: false,
+  }));
+
+  return (
+    <div className="p-2">
+      {rows.map((p) => {
+        const zone = getZone(p.zoneId);
+        return (
+          <div
+            key={p.id}
+            className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-white/5"
+          >
+            <div
+              className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0"
+              style={{ backgroundColor: p.mine ? '#3b82f6' : colorFor(p.id) }}
+            >
+              {p.name[0]?.toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium truncate">
+                {p.name}{p.mine ? ' (you)' : ''}
+              </div>
+              <div className="text-xs text-gray-400 truncate">
+                {zone ? `📍 ${zone.name}` : 'Open floor'}
+              </div>
+            </div>
+            {!p.mine && (
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => onWave(p.id)}
+                  className="px-2 py-1 text-xs rounded bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300"
+                  title="Wave"
+                >
+                  👋
+                </button>
+                <button
+                  onClick={() => onLocate(p.id)}
+                  className="px-2 py-1 text-xs rounded bg-white/5 hover:bg-white/10 text-gray-300"
+                  title="Locate on map"
+                >
+                  📍
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// ChatView — global office chat
+// ──────────────────────────────────────────────
+function ChatView({
+  messages,
+  input,
+  setInput,
+  onSend,
+  scrollRef,
+  colorFor,
+}: {
+  messages: ChatMessage[];
+  input: string;
+  setInput: (v: string) => void;
+  onSend: () => void;
+  scrollRef: React.RefObject<HTMLDivElement>;
+  colorFor: (id: string) => string;
+}) {
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, scrollRef]);
+
+  return (
+    <div className="flex flex-col h-full">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
+        {messages.length === 0 && (
+          <div className="text-gray-500 text-sm text-center mt-8">
+            No messages yet. Say hi.
+          </div>
+        )}
+        {messages.map((m) => (
+          <div key={m.id} className={`flex gap-2 ${m.mine ? 'justify-end' : ''}`}>
+            {!m.mine && (
+              <div
+                className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
+                style={{ backgroundColor: colorFor(m.from) }}
+              >
+                {m.fromName[0]?.toUpperCase()}
+              </div>
+            )}
+            <div className={`max-w-[75%] ${m.mine ? 'text-right' : ''}`}>
+              {!m.mine && (
+                <div className="text-[11px] text-gray-400 mb-0.5 px-1">{m.fromName}</div>
+              )}
+              <div
+                className={`inline-block px-3 py-1.5 rounded-2xl text-sm break-words ${
+                  m.mine ? 'bg-indigo-500 text-white' : 'bg-white/10 text-white'
+                }`}
+              >
+                {m.text}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (input.trim()) onSend();
+        }}
+        className="border-t border-white/5 p-2 flex gap-2"
+      >
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Message everyone…"
+          className="flex-1 bg-white/5 border border-white/10 rounded-full px-3 py-2 text-sm text-white placeholder-gray-500 outline-none focus:border-indigo-400"
+        />
+        <button
+          type="submit"
+          disabled={!input.trim()}
+          className="bg-indigo-500 hover:bg-indigo-600 text-white px-3 rounded-full text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Send
+        </button>
+      </form>
+    </div>
   );
 }
