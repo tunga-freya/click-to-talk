@@ -493,7 +493,7 @@ export default function App() {
   // ──────────────────────────────────────────────
   if (!name) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-100">
+      <div className="min-h-screen flex items-center justify-center office-bg">
         <div className="bg-white p-8 rounded-2xl shadow-xl w-96">
           <h1 className="text-3xl font-bold mb-2">Click to Talk</h1>
           <p className="text-gray-600 mb-6">Type a name to join the lobby.</p>
@@ -538,10 +538,10 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-100 p-8">
-      <header className="flex items-center justify-between mb-8 max-w-5xl mx-auto">
-        <h1 className="text-2xl font-bold text-gray-800">Click to Talk</h1>
-        <div className="flex items-center gap-4 text-gray-600 text-sm">
+    <div className="min-h-screen office-bg p-8">
+      <header className="flex items-center justify-between mb-8 max-w-5xl mx-auto bg-black/40 backdrop-blur-sm rounded-2xl px-5 py-3">
+        <h1 className="text-2xl font-bold text-white drop-shadow">Click to Talk</h1>
+        <div className="flex items-center gap-4 text-gray-200 text-sm">
           {connected ? (
             <span className="flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-green-500" /> Connected
@@ -578,7 +578,7 @@ export default function App() {
             <div className="w-24 h-24 rounded-full bg-blue-500 flex items-center justify-center text-white text-3xl font-bold ring-4 ring-blue-200 shadow-lg">
               {name[0]?.toUpperCase()}
             </div>
-            <div className="mt-3 text-sm font-medium text-gray-700">{name} (you)</div>
+            <div className="mt-3 text-sm font-semibold text-white drop-shadow-lg bg-blue-600/80 backdrop-blur-sm px-3 py-1 rounded-full">{name} (you)</div>
           </div>
 
           {peers.map((p) => {
@@ -592,9 +592,9 @@ export default function App() {
                 >
                   {p.name[0]?.toUpperCase()}
                 </button>
-                <div className="mt-3 text-sm font-medium text-gray-700">{p.name}</div>
+                <div className="mt-3 text-sm font-semibold text-white drop-shadow-lg bg-black/50 backdrop-blur-sm px-3 py-1 rounded-full">{p.name}</div>
                 {inCall && (
-                  <div className="mt-1 text-xs text-green-600">in call</div>
+                  <div className="mt-1 text-xs text-green-300 font-medium drop-shadow">in call</div>
                 )}
 
                 {selected === p.identity && callState === 'idle' && (
@@ -621,9 +621,9 @@ export default function App() {
         </div>
 
         {peers.length === 0 && connected && (
-          <div className="text-center text-gray-500 mt-16">
+          <div className="text-center text-white mt-16 bg-black/50 backdrop-blur-sm rounded-2xl py-8 px-6 max-w-md mx-auto">
             <p className="text-lg">No one else online yet.</p>
-            <p className="text-sm mt-2">
+            <p className="text-sm mt-2 text-gray-300">
               Open this page in another browser (or share the URL) to talk to someone.
             </p>
           </div>
