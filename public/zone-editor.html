@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zone Editor — Click to Talk</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    body {
+      background: #0e1320;
+      color: #e5e7eb;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+    }
+
+    /* ── Canvas pane ─────────────────────────── */
+    #canvas-pane { flex: 1; overflow: auto; position: relative; background: #050810; }
+    #canvas-pane::-webkit-scrollbar { width: 12px; height: 12px; }
+    #canvas-pane::-webkit-scrollbar-thumb { background: #232a3d; border-radius: 6px; }
+    #canvas-pane::-webkit-scrollbar-track { background: #0e1320; }
+
+    #wrap {
+      position: relative;
+      display: inline-block;
+      transform-origin: 0 0;
+      user-select: none;
+    }
+    #wrap img {
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+      pointer-events: none;
+    }
+
+    .zone {
+      position: absolute;
+      background: rgba(236, 72, 153, 0.20);
+      border: 2px solid rgba(244, 114, 182, 0.9);
+      border-radius: 4px;
+      cursor: move;
+      transition: background 80ms;
+    }
+    .zone:hover { background: rgba(236, 72, 153, 0.30); }
+    .zone.selected {
+      background: rgba(99, 102, 241, 0.30);
+      border-color: rgba(165, 180, 252, 1);
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.6);
+    }
+    .zone-label {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform: translateY(-100%);
+      padding: 2px 8px;
+      background: rgba(15, 20, 32, 0.95);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 4px 4px 0 0;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    /* Resize handles */
+    .handle {
+      position: absolute;
+      width: 10px; height: 10px;
+      background: #fff;
+      border: 2px solid #6366f1;
+      border-radius: 50%;
+    }
+    .handle.nw { top: -6px; left: -6px; cursor: nwse-resize; }
+    .handle.ne { top: -6px; right: -6px; cursor: nesw-resize; }
+    .handle.sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+    .handle.se { bottom: -6px; right: -6px; cursor: nwse-resize; }
+
+    .preview {
+      position: absolute;
+      background: rgba(34, 197, 94, 0.25);
+      border: 2px dashed rgba(74, 222, 128, 0.95);
+      border-radius: 4px;
+      pointer-events: none;
+    }
+
+    /* ── Sidebar ───────────────────────────── */
+    #sidebar {
+      width: 340px;
+      flex-shrink: 0;
+      background: #131825;
+      border-left: 1px solid #1f2937;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    .sidebar-header {
+      padding: 16px;
+      border-bottom: 1px solid #1f2937;
+    }
+    .sidebar-header h1 { margin: 0 0 4px; font-size: 18px; }
+    .sidebar-header p { margin: 0; font-size: 12px; color: #9ca3af; line-height: 1.5; }
+
+    .toolbar {
+      padding: 12px 16px;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      border-bottom: 1px solid #1f2937;
+    }
+
+    button {
+      background: #6366f1;
+      border: none;
+      color: white;
+      padding: 7px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: background 80ms;
+    }
+    button:hover { background: #4f46e5; }
+    button:disabled { background: #1f2937; color: #6b7280; cursor: not-allowed; }
+    button.secondary { background: #232a3d; }
+    button.secondary:hover { background: #2d3548; }
+    button.danger { background: #dc2626; }
+    button.danger:hover { background: #b91c1c; }
+
+    .zoom-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+    .zoom-controls button {
+      width: 24px; height: 24px; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    #zones-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+    }
+    .zone-item {
+      background: #1a2030;
+      border: 1px solid #232a3d;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: border-color 80ms;
+    }
+    .zone-item:hover { border-color: #334155; }
+    .zone-item.selected {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 1px #6366f1;
+    }
+    .zone-item-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .zone-item-name {
+      font-weight: 600;
+      font-size: 13px;
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: white;
+      padding: 0;
+      font-family: inherit;
+      outline: none;
+    }
+    .zone-item-name:focus {
+      background: #0e1320;
+      padding: 2px 4px;
+      border-radius: 4px;
+    }
+    .zone-coords {
+      color: #9ca3af;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 10px;
+      margin-top: 4px;
+    }
+
+    .export-block {
+      border-top: 1px solid #1f2937;
+      padding: 12px 16px;
+      background: #0e1320;
+    }
+    .export-block label {
+      display: block;
+      font-size: 11px;
+      color: #9ca3af;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    textarea {
+      width: 100%;
+      height: 140px;
+      background: #050810;
+      color: #a5f3fc;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 10px;
+      padding: 8px;
+      border: 1px solid #232a3d;
+      border-radius: 6px;
+      resize: vertical;
+      outline: none;
+    }
+
+    .empty-state {
+      text-align: center;
+      color: #6b7280;
+      padding: 32px 16px;
+      font-size: 12px;
+    }
+
+    .hint {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      background: rgba(15, 20, 32, 0.95);
+      backdrop-filter: blur(8px);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 11px;
+      color: #cbd5e1;
+      pointer-events: none;
+      z-index: 100;
+      border: 1px solid #1f2937;
+    }
+    .hint kbd {
+      background: #232a3d;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-family: inherit;
+      font-size: 10px;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-pane">
+    <div id="wrap">
+      <img src="/office-bg.png" id="bg" alt="office" />
+    </div>
+  </div>
+
+  <div class="hint">
+    Drag empty area: <kbd>draw zone</kbd> · Drag zone: <kbd>move</kbd> · Drag handles: <kbd>resize</kbd> · Right-click zone: <kbd>delete</kbd>
+  </div>
+
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <h1>🗺 Zone Editor</h1>
+      <p>Click + drag on the map to mark a private zone. Drag a zone to move it, drag its corners to resize. Right-click to delete.</p>
+    </div>
+
+    <div class="toolbar">
+      <button onclick="exportJSON()">📋 Copy JSON</button>
+      <button class="secondary" onclick="importJSON()">📥 Paste JSON</button>
+      <button class="danger" onclick="clearAll()">Clear all</button>
+      <div class="zoom-controls">
+        <button class="secondary" onclick="setZoom(zoom - 0.1)">−</button>
+        <span id="zoom-label">100%</span>
+        <button class="secondary" onclick="setZoom(zoom + 0.1)">+</button>
+        <button class="secondary" onclick="setZoom(1)">1:1</button>
+        <button class="secondary" onclick="fitToScreen()">fit</button>
+      </div>
+    </div>
+
+    <div id="zones-list"></div>
+
+    <div class="export-block">
+      <label>JSON output (auto-updated)</label>
+      <textarea id="export" readonly></textarea>
+    </div>
+  </aside>
+
+  <script>
+    const STORAGE_KEY = 'click_to_talk_zones_v3';
+
+    /** @type {{id:string,name:string,x:number,y:number,w:number,h:number}[]} */
+    let zones = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    let selectedIdx = null;
+    let zoom = 1;
+
+    const wrap = document.getElementById('wrap');
+    const img = document.getElementById('bg');
+    const pane = document.getElementById('canvas-pane');
+    const zoomLabel = document.getElementById('zoom-label');
+
+    // Drag state
+    let drawing = null; // {startX,startY,endX,endY}
+    let moving = null;  // {idx, offsetX, offsetY}
+    let resizing = null; // {idx, corner: 'nw'|'ne'|'sw'|'se'}
+    let previewEl = null;
+
+    img.onload = () => {
+      // initial zoom: fit to pane
+      fitToScreen();
+      render();
+    };
+
+    function setZoom(z) {
+      zoom = Math.max(0.1, Math.min(4, z));
+      wrap.style.transform = `scale(${zoom})`;
+      wrap.style.width = img.naturalWidth + 'px';
+      wrap.style.height = img.naturalHeight + 'px';
+      zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
+    }
+
+    function fitToScreen() {
+      const padPx = 24;
+      const availW = pane.clientWidth - padPx;
+      const availH = pane.clientHeight - padPx;
+      const z = Math.min(availW / img.naturalWidth, availH / img.naturalHeight, 1);
+      setZoom(z);
+    }
+
+    function imageCoords(clientX, clientY) {
+      const rect = img.getBoundingClientRect();
+      return {
+        x: Math.round((clientX - rect.left) / zoom),
+        y: Math.round((clientY - rect.top) / zoom),
+      };
+    }
+
+    // ── Drawing ────────────────────────────
+    wrap.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      const target = /** @type {HTMLElement} */ (e.target);
+      if (target.classList.contains('handle')) return; // handled separately
+      if (target.classList.contains('zone')) return;   // handled separately
+      e.preventDefault();
+      const pt = imageCoords(e.clientX, e.clientY);
+      drawing = { startX: pt.x, startY: pt.y, endX: pt.x, endY: pt.y };
+      selectedIdx = null;
+      render();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (drawing) {
+        const pt = imageCoords(e.clientX, e.clientY);
+        drawing.endX = pt.x;
+        drawing.endY = pt.y;
+        renderPreview();
+      } else if (moving) {
+        const pt = imageCoords(e.clientX, e.clientY);
+        const z = zones[moving.idx];
+        z.x = Math.max(0, Math.round(pt.x - moving.offsetX));
+        z.y = Math.max(0, Math.round(pt.y - moving.offsetY));
+        renderZones();
+        save();
+      } else if (resizing) {
+        const pt = imageCoords(e.clientX, e.clientY);
+        const z = zones[resizing.idx];
+        const r = { x1: z.x, y1: z.y, x2: z.x + z.w, y2: z.y + z.h };
+        if (resizing.corner.includes('w')) r.x1 = pt.x;
+        if (resizing.corner.includes('e')) r.x2 = pt.x;
+        if (resizing.corner.includes('n')) r.y1 = pt.y;
+        if (resizing.corner.includes('s')) r.y2 = pt.y;
+        z.x = Math.round(Math.min(r.x1, r.x2));
+        z.y = Math.round(Math.min(r.y1, r.y2));
+        z.w = Math.round(Math.abs(r.x2 - r.x1));
+        z.h = Math.round(Math.abs(r.y2 - r.y1));
+        renderZones();
+        save();
+      }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      if (drawing) {
+        const { startX, startY, endX, endY } = drawing;
+        drawing = null;
+        removePreview();
+        const x = Math.min(startX, endX);
+        const y = Math.min(startY, endY);
+        const w = Math.abs(endX - startX);
+        const h = Math.abs(endY - startY);
+        if (w < 12 || h < 12) return; // ignore tiny drags
+        const name = prompt('Zone name:', `Zone ${zones.length + 1}`);
+        if (!name) return;
+        const id = slugify(name) + '-' + Math.random().toString(36).slice(2, 6);
+        zones.push({ id, name: name.trim(), x, y, w, h });
+        selectedIdx = zones.length - 1;
+        save();
+        render();
+      }
+      if (moving) { moving = null; render(); }
+      if (resizing) { resizing = null; render(); }
+    });
+
+    function slugify(s) {
+      return s.toLowerCase().trim()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    }
+
+    function renderPreview() {
+      if (!drawing) return;
+      if (!previewEl) {
+        previewEl = document.createElement('div');
+        previewEl.className = 'preview';
+        wrap.appendChild(previewEl);
+      }
+      const x = Math.min(drawing.startX, drawing.endX);
+      const y = Math.min(drawing.startY, drawing.endY);
+      previewEl.style.left = x + 'px';
+      previewEl.style.top = y + 'px';
+      previewEl.style.width = Math.abs(drawing.endX - drawing.startX) + 'px';
+      previewEl.style.height = Math.abs(drawing.endY - drawing.startY) + 'px';
+    }
+    function removePreview() {
+      if (previewEl) { previewEl.remove(); previewEl = null; }
+    }
+
+    // ── Render ─────────────────────────────
+    function renderZones() {
+      wrap.querySelectorAll('.zone').forEach((el) => el.remove());
+      zones.forEach((z, i) => {
+        const el = document.createElement('div');
+        el.className = 'zone' + (selectedIdx === i ? ' selected' : '');
+        el.style.left = z.x + 'px';
+        el.style.top = z.y + 'px';
+        el.style.width = z.w + 'px';
+        el.style.height = z.h + 'px';
+        el.title = `${z.name} — ${z.w}×${z.h}`;
+        el.addEventListener('mousedown', (e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          selectedIdx = i;
+          const pt = imageCoords(e.clientX, e.clientY);
+          moving = { idx: i, offsetX: pt.x - z.x, offsetY: pt.y - z.y };
+          render();
+        });
+        el.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          if (confirm(`Delete "${z.name}"?`)) {
+            zones.splice(i, 1);
+            if (selectedIdx === i) selectedIdx = null;
+            else if (selectedIdx !== null && selectedIdx > i) selectedIdx--;
+            save();
+            render();
+          }
+        });
+
+        const lbl = document.createElement('div');
+        lbl.className = 'zone-label';
+        lbl.textContent = z.name;
+        el.appendChild(lbl);
+
+        if (selectedIdx === i) {
+          ['nw', 'ne', 'sw', 'se'].forEach((corner) => {
+            const h = document.createElement('div');
+            h.className = 'handle ' + corner;
+            h.addEventListener('mousedown', (e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              e.stopPropagation();
+              resizing = { idx: i, corner };
+            });
+            el.appendChild(h);
+          });
+        }
+
+        wrap.appendChild(el);
+      });
+    }
+
+    function renderList() {
+      const list = document.getElementById('zones-list');
+      if (zones.length === 0) {
+        list.innerHTML = '<div class="empty-state">No zones yet. Click + drag on the map to create one.</div>';
+        return;
+      }
+      list.innerHTML = '';
+      zones.forEach((z, i) => {
+        const item = document.createElement('div');
+        item.className = 'zone-item' + (selectedIdx === i ? ' selected' : '');
+        item.addEventListener('click', (e) => {
+          if (e.target instanceof HTMLInputElement) return;
+          if (e.target instanceof HTMLButtonElement) return;
+          selectedIdx = selectedIdx === i ? null : i;
+          render();
+        });
+
+        const header = document.createElement('div');
+        header.className = 'zone-item-header';
+
+        const nameInput = document.createElement('input');
+        nameInput.className = 'zone-item-name';
+        nameInput.value = z.name;
+        nameInput.addEventListener('change', () => {
+          z.name = nameInput.value.trim() || z.name;
+          save();
+          render();
+        });
+        nameInput.addEventListener('click', (e) => e.stopPropagation());
+
+        const del = document.createElement('button');
+        del.className = 'danger';
+        del.textContent = '×';
+        del.style.width = '24px';
+        del.style.padding = '0';
+        del.style.height = '24px';
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (confirm(`Delete "${z.name}"?`)) {
+            zones.splice(i, 1);
+            if (selectedIdx === i) selectedIdx = null;
+            else if (selectedIdx !== null && selectedIdx > i) selectedIdx--;
+            save();
+            render();
+          }
+        });
+
+        header.appendChild(nameInput);
+        header.appendChild(del);
+
+        const coords = document.createElement('div');
+        coords.className = 'zone-coords';
+        coords.textContent = `x:${z.x} y:${z.y} w:${z.w} h:${z.h} · id:${z.id}`;
+
+        item.appendChild(header);
+        item.appendChild(coords);
+        list.appendChild(item);
+      });
+    }
+
+    function updateExport() {
+      const ts = /** @type {HTMLTextAreaElement} */ (document.getElementById('export'));
+      const out = zones.map((z) => ({
+        id: z.id,
+        name: z.name,
+        x: z.x,
+        y: z.y,
+        w: z.w,
+        h: z.h,
+      }));
+      ts.value = JSON.stringify(out, null, 2);
+    }
+
+    function render() {
+      renderZones();
+      renderList();
+      updateExport();
+    }
+
+    function exportJSON() {
+      const ts = /** @type {HTMLTextAreaElement} */ (document.getElementById('export'));
+      ts.select();
+      navigator.clipboard.writeText(ts.value).then(
+        () => alert(`Copied ${zones.length} zone(s) to clipboard.`),
+        () => alert('Copy failed — select the text manually.')
+      );
+    }
+
+    function importJSON() {
+      const raw = prompt('Paste a JSON array of zones:');
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) throw new Error('not an array');
+        zones = parsed.map((z) => ({
+          id: String(z.id || slugify(z.name || 'zone') + '-' + Math.random().toString(36).slice(2, 6)),
+          name: String(z.name || 'Zone'),
+          x: Math.round(Number(z.x) || 0),
+          y: Math.round(Number(z.y) || 0),
+          w: Math.round(Number(z.w) || 0),
+          h: Math.round(Number(z.h) || 0),
+        }));
+        selectedIdx = null;
+        save();
+        render();
+      } catch (e) {
+        alert('Invalid JSON: ' + (e && e.message));
+      }
+    }
+
+    function clearAll() {
+      if (!confirm(`Delete ALL ${zones.length} zones?`)) return;
+      zones = [];
+      selectedIdx = null;
+      save();
+      render();
+    }
+
+    function save() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(zones));
+    }
+
+    // Delete key removes selected
+    window.addEventListener('keydown', (e) => {
+      if (selectedIdx !== null && (e.key === 'Delete' || e.key === 'Backspace')) {
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
+        e.preventDefault();
+        if (confirm(`Delete "${zones[selectedIdx].name}"?`)) {
+          zones.splice(selectedIdx, 1);
+          selectedIdx = null;
+          save();
+          render();
+        }
+      }
+      if (e.key === 'Escape') {
+        selectedIdx = null;
+        render();
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      // Don't auto-resize zoom on every viewport change; let user manage it.
+    });
+  </script>
+</body>
+</html>

@@ -10,8 +10,8 @@ import {
 // ──────────────────────────────────────────────
 // Constants
 // ──────────────────────────────────────────────
-const MAP_W = 1546;
-const MAP_H = 1612;
+const MAP_W = 2000;
+const MAP_H = 1104;
 const AVATAR_R = 24; // radius px
 const HEARING_RADIUS = 280; // px — open-floor proximity range
 const HEARING_FULL = 80; // px — open-floor full-volume range
@@ -34,27 +34,8 @@ interface Zone {
   h: number;
 }
 
-const ZONES: Zone[] = [
-  // Left column — dining/lunch booths
-  { id: 'lunch-1', name: 'Lunch 1',         x:  35, y:  330, w: 310, h: 250 },
-  { id: 'lunch-2', name: 'Lunch 2',         x:  35, y:  640, w: 310, h: 250 },
-  { id: 'lunch-3', name: 'Lunch 3',         x:  35, y:  950, w: 310, h: 250 },
-  { id: 'lunch-4', name: 'Lunch 4',         x:  35, y: 1250, w: 310, h: 260 },
-
-  // Center — desk clusters
-  { id: 'desk-alper', name: 'Dr. Alper',    x: 420, y:  370, w: 600, h: 290 },
-  { id: 'desk-co-1', name: 'Co-Working 1',  x: 420, y:  720, w: 380, h: 230 },
-  { id: 'desk-co-2', name: 'Desk Area',     x: 800, y:  720, w: 600, h: 290 },
-
-  // Right side — meeting room + tunga booth
-  { id: 'tunga-booth', name: 'Tunga Booth', x: 1120, y: 390, w: 360, h: 220 },
-  { id: 'meeting-room', name: 'Meeting Room', x: 1100, y: 640, w: 420, h: 320 },
-
-  // Bottom — 1-on-1 booths
-  { id: '1on1-brown', name: '1-on-1 Brown', x: 380, y: 1020, w: 540, h: 280 },
-  { id: '1on1-a',     name: '1-on-1',       x: 990, y: 1170, w: 280, h: 180 },
-  { id: '1on1-b',     name: '1-on-1',       x: 990, y: 1380, w: 280, h: 180 },
-];
+// Empty for now — will be filled in from /zone-editor.html after you label the new map.
+const ZONES: Zone[] = [];
 
 function getZoneId(x: number, y: number): string | null {
   for (const z of ZONES) {
@@ -123,7 +104,7 @@ export default function App() {
   const [peers, setPeers] = useState<Map<string, PeerInfo>>(new Map());
 
   // My position (rendered)
-  const [myPos, setMyPos] = useState({ x: 770, y: 800 });
+  const [myPos, setMyPos] = useState({ x: 1000, y: 500 });
 
   // Viewport
   const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
@@ -142,7 +123,7 @@ export default function App() {
   const myIdentityRef = useRef<string>(getOrCreateIdentity());
 
   const heldKeysRef = useRef<Set<string>>(new Set());
-  const myPosRef = useRef({ x: 770, y: 800 });
+  const myPosRef = useRef({ x: 1000, y: 500 });
   const lastBroadcastRef = useRef(0);
   const lastKeepaliveRef = useRef(0);
 
