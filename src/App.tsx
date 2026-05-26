@@ -6,6 +6,8 @@ import {
   RemoteParticipant,
   RemoteTrack,
   RemoteTrackPublication,
+  RemoteVideoTrack,
+  LocalTrackPublication,
 } from 'livekit-client';
 
 type CallState = 'idle' | 'calling' | 'incoming' | 'in_call';
@@ -94,6 +96,9 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
   const [waveToast, setWaveToast] = useState<{ name: string; at: number } | null>(null);
+  const [isMyScreenSharing, setIsMyScreenSharing] = useState(false);
+  const [peerScreenTrack, setPeerScreenTrack] = useState<RemoteVideoTrack | null>(null);
+  const peerScreenVideoRef = useRef<HTMLVideoElement>(null);
 
   const roomRef = useRef<Room | null>(null);
   const myIdentityRef = useRef<string>(getOrCreateIdentity());
@@ -155,29 +160,47 @@ export default function App() {
           }
         });
 
-        room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, _pub, participant) => {
+        room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, pub, participant) => {
           if (track.kind === Track.Kind.Audio) {
             const el = track.attach() as HTMLAudioElement;
-            el.id = `audio-${participant.identity}`;
+            el.id = `audio-${participant.identity}-${pub.trackSid}`;
             el.autoplay = true;
             document.body.appendChild(el);
-            audioElementsRef.current.set(participant.identity, el);
+            audioElementsRef.current.set(`${participant.identity}-${pub.trackSid}`, el);
+          } else if (
+            track.kind === Track.Kind.Video &&
+            pub.source === Track.Source.ScreenShare
+          ) {
+            setPeerScreenTrack(track as RemoteVideoTrack);
           }
         });
 
-        room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack, _pub, participant) => {
+        room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack, pub, participant) => {
+          if (
+            track.kind === Track.Kind.Video &&
+            pub.source === Track.Source.ScreenShare
+          ) {
+            setPeerScreenTrack(null);
+          }
           track.detach().forEach((el) => el.remove());
-          audioElementsRef.current.delete(participant.identity);
+          audioElementsRef.current.delete(`${participant.identity}-${pub.trackSid}`);
         });
 
         room.on(RoomEvent.TrackPublished, (pub: RemoteTrackPublication, participant) => {
-          // If we're already in a call with this participant, subscribe to their new audio
+          // While in a call with this participant, subscribe to any new track they publish
+          // (covers screen share start, screen-share audio, etc.)
           if (
             callStateRef.current === 'in_call' &&
-            callPeerRef.current?.identity === participant.identity &&
-            pub.kind === Track.Kind.Audio
+            callPeerRef.current?.identity === participant.identity
           ) {
             pub.setSubscribed(true);
+          }
+        });
+
+        room.on(RoomEvent.LocalTrackUnpublished, (pub: LocalTrackPublication) => {
+          // Detect when the user clicks the browser's native "Stop sharing" pill
+          if (pub.source === Track.Source.ScreenShare) {
+            setIsMyScreenSharing(false);
           }
         });
 
@@ -231,6 +254,17 @@ export default function App() {
     return () => clearTimeout(t);
   }, [waveToast]);
 
+  // Attach peer's screen-share video to <video> element
+  useEffect(() => {
+    const el = peerScreenVideoRef.current;
+    if (peerScreenTrack && el) {
+      peerScreenTrack.attach(el);
+      return () => {
+        peerScreenTrack.detach(el);
+      };
+    }
+  }, [peerScreenTrack]);
+
   // ──────────────────────────────────────────────
   // Helpers
   // ──────────────────────────────────────────────
@@ -256,7 +290,7 @@ export default function App() {
     if (!r) return;
     const peer = r.remoteParticipants.get(peerId);
     if (!peer) return;
-    peer.audioTrackPublications.forEach((pub) => pub.setSubscribed(true));
+    peer.trackPublications.forEach((pub) => pub.setSubscribed(true));
   };
 
   const unsubscribeFromPeer = async (peerId: string) => {
@@ -264,7 +298,7 @@ export default function App() {
     if (!r) return;
     const peer = r.remoteParticipants.get(peerId);
     if (!peer) return;
-    peer.audioTrackPublications.forEach((pub) => pub.setSubscribed(false));
+    peer.trackPublications.forEach((pub) => pub.setSubscribed(false));
   };
 
   const startCallAudio = async (peerId: string) => {
@@ -280,12 +314,17 @@ export default function App() {
   const endCallLocally = async () => {
     const r = roomRef.current;
     if (r) {
+      try {
+        await r.localParticipant.setScreenShareEnabled(false);
+      } catch {}
       await r.localParticipant.setMicrophoneEnabled(false);
       if (callPeerRef.current) {
         await unsubscribeFromPeer(callPeerRef.current.identity);
       }
     }
     ringerRef.current.stop();
+    setIsMyScreenSharing(false);
+    setPeerScreenTrack(null);
     setCallState('idle');
     setCallPeer(null);
     setCallStart(null);
@@ -471,6 +510,33 @@ export default function App() {
       fromName: name,
       to: peer.identity,
     });
+  };
+
+  const onShareScreen = async () => {
+    const r = roomRef.current;
+    if (!r) return;
+    try {
+      const enabled = await r.localParticipant.setScreenShareEnabled(true, {
+        audio: true,
+        systemAudio: 'include',
+        selfBrowserSurface: 'exclude',
+        surfaceSwitching: 'include',
+      } as any);
+      if (enabled) setIsMyScreenSharing(true);
+    } catch (e: any) {
+      if (e?.name !== 'NotAllowedError') {
+        console.error('Screen share failed', e);
+      }
+    }
+  };
+
+  const onStopShare = async () => {
+    const r = roomRef.current;
+    if (!r) return;
+    try {
+      await r.localParticipant.setScreenShareEnabled(false);
+    } catch {}
+    setIsMyScreenSharing(false);
   };
 
   const onMuteToggle = async () => {
@@ -690,46 +756,141 @@ export default function App() {
 
       {/* In-call */}
       {callState === 'in_call' && callPeer && (
-        <Overlay>
-          <div className="text-center">
-            <div
-              className={`w-32 h-32 rounded-full ${colorFor(callPeer.identity)} flex items-center justify-center text-white text-5xl font-bold mx-auto mb-4`}
-            >
-              {callPeer.name[0]?.toUpperCase()}
+        <Overlay wide={!!peerScreenTrack || isMyScreenSharing}>
+          {peerScreenTrack ? (
+            <div className="flex flex-col gap-4">
+              <div className="bg-black rounded-2xl overflow-hidden flex items-center justify-center" style={{ aspectRatio: '16 / 9', maxHeight: '70vh' }}>
+                <video
+                  ref={peerScreenVideoRef}
+                  autoPlay
+                  playsInline
+                  muted={false}
+                  className="w-full h-full object-contain"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-12 h-12 rounded-full ${colorFor(callPeer.identity)} flex items-center justify-center text-white text-xl font-bold`}
+                  >
+                    {callPeer.name[0]?.toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="font-semibold">{callPeer.name}</div>
+                    <div className="text-gray-500 text-sm font-mono">
+                      🖥 sharing · {mm}:{ss}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={onMuteToggle}
+                    className={`px-5 py-2.5 rounded-full font-semibold transition ${
+                      muted
+                        ? 'bg-yellow-500 text-white hover:bg-yellow-600'
+                        : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+                    }`}
+                  >
+                    {muted ? '🔇 Unmute' : '🎙 Mute'}
+                  </button>
+                  {!isMyScreenSharing ? (
+                    <button
+                      onClick={onShareScreen}
+                      className="bg-indigo-500 text-white px-5 py-2.5 rounded-full hover:bg-indigo-600 font-semibold transition"
+                    >
+                      🖥 Share
+                    </button>
+                  ) : (
+                    <button
+                      onClick={onStopShare}
+                      className="bg-orange-500 text-white px-5 py-2.5 rounded-full hover:bg-orange-600 font-semibold transition"
+                    >
+                      🛑 Stop share
+                    </button>
+                  )}
+                  <button
+                    onClick={onHangup}
+                    className="bg-red-500 text-white px-6 py-2.5 rounded-full hover:bg-red-600 font-semibold transition"
+                  >
+                    End
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="text-3xl font-bold">{callPeer.name}</div>
-            <div className="text-gray-500 mb-8 font-mono">
-              {mm}:{ss}
-            </div>
-            <div className="flex gap-4 justify-center">
-              <button
-                onClick={onMuteToggle}
-                className={`px-6 py-3 rounded-full font-semibold transition ${
-                  muted
-                    ? 'bg-yellow-500 text-white hover:bg-yellow-600'
-                    : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
-                }`}
+          ) : (
+            <div className="text-center">
+              <div
+                className={`w-32 h-32 rounded-full ${colorFor(callPeer.identity)} flex items-center justify-center text-white text-5xl font-bold mx-auto mb-4`}
               >
-                {muted ? '🔇 Unmute' : '🎙 Mute'}
-              </button>
-              <button
-                onClick={onHangup}
-                className="bg-red-500 text-white px-8 py-3 rounded-full hover:bg-red-600 font-semibold transition"
-              >
-                End
-              </button>
+                {callPeer.name[0]?.toUpperCase()}
+              </div>
+              <div className="text-3xl font-bold">{callPeer.name}</div>
+              <div className="text-gray-500 mb-2 font-mono">
+                {mm}:{ss}
+              </div>
+              {isMyScreenSharing && (
+                <div className="mb-4 inline-flex items-center gap-2 bg-green-100 text-green-800 px-4 py-1.5 rounded-full text-sm font-medium">
+                  <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                  You're sharing your screen
+                </div>
+              )}
+              <div className="flex gap-3 justify-center flex-wrap mt-4">
+                <button
+                  onClick={onMuteToggle}
+                  className={`px-6 py-3 rounded-full font-semibold transition ${
+                    muted
+                      ? 'bg-yellow-500 text-white hover:bg-yellow-600'
+                      : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+                  }`}
+                >
+                  {muted ? '🔇 Unmute' : '🎙 Mute'}
+                </button>
+                {!isMyScreenSharing ? (
+                  <button
+                    onClick={onShareScreen}
+                    className="bg-indigo-500 text-white px-6 py-3 rounded-full hover:bg-indigo-600 font-semibold transition"
+                  >
+                    🖥 Share screen
+                  </button>
+                ) : (
+                  <button
+                    onClick={onStopShare}
+                    className="bg-orange-500 text-white px-6 py-3 rounded-full hover:bg-orange-600 font-semibold transition"
+                  >
+                    🛑 Stop sharing
+                  </button>
+                )}
+                <button
+                  onClick={onHangup}
+                  className="bg-red-500 text-white px-8 py-3 rounded-full hover:bg-red-600 font-semibold transition"
+                >
+                  End
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </Overlay>
       )}
     </div>
   );
 }
 
-function Overlay({ children }: { children: React.ReactNode }) {
+function Overlay({
+  children,
+  wide,
+}: {
+  children: React.ReactNode;
+  wide?: boolean;
+}) {
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm">
-      <div className="bg-white rounded-3xl p-10 shadow-2xl min-w-96">{children}</div>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+      <div
+        className={`bg-white rounded-3xl shadow-2xl ${
+          wide ? 'w-full max-w-6xl p-6' : 'min-w-96 p-10'
+        }`}
+      >
+        {children}
+      </div>
     </div>
   );
 }
