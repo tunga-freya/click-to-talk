@@ -760,90 +760,138 @@ export default function App() {
         </div>
       </div>
 
-      {/* Bottom action bar — Gather-style */}
-      <div className="absolute bottom-0 left-0 right-0 bg-[#0e1320]/95 backdrop-blur border-t border-white/5 px-4 py-2.5 flex items-center justify-between z-30 text-white">
-        {/* Left: self avatar + name + status */}
+      {/* Bottom action bar — Gather-style (pixel-matched) */}
+      <div
+        className="absolute bottom-0 left-0 right-0 bg-[#0b1018] border-t border-black/40 flex items-center z-30 text-white"
+        style={{ height: 64, paddingLeft: 0, paddingRight: 16 }}
+      >
+        {/* Far left: Gather-style logo block */}
+        <div className="flex-shrink-0 w-14 h-full flex items-center justify-center border-r border-white/5">
+          <GatherLogo />
+        </div>
+
+        {/* Left: avatar + name/status + edit pencil */}
         <button
           onClick={onChangeName}
-          className="flex items-center gap-3 hover:bg-white/5 rounded-lg px-2 py-1 transition group"
+          className="flex items-center gap-2.5 hover:bg-white/5 h-full px-3 transition flex-shrink-0"
           title="Change name"
         >
-          <div className="relative">
-            <div className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold text-lg">
+          <div className="relative flex-shrink-0">
+            <div
+              className="w-10 h-10 rounded-[10px] flex items-center justify-center text-white font-bold text-lg shadow-inner"
+              style={{ backgroundColor: colorFor(myIdentityRef.current) }}
+            >
               {name[0]?.toUpperCase()}
             </div>
-            <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-[#0e1320] ${connected ? 'bg-green-500' : 'bg-gray-500'}`} />
+            <div
+              className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-[#0b1018] ${
+                connected ? 'bg-green-500' : 'bg-gray-500'
+              }`}
+            />
           </div>
-          <div className="text-left">
-            <div className="font-medium text-sm leading-tight">{name}</div>
-            <div className="text-gray-400 text-xs leading-tight">
-              {myZone ? `at ${myZone.name}` : 'Open floor'}
+          <div className="text-left min-w-0">
+            <div className="font-semibold text-[13px] leading-tight truncate max-w-[120px]">{name}</div>
+            <div className="text-gray-400 text-[11px] leading-tight truncate max-w-[120px]">
+              {myZone ? myZone.name : 'hello'}
             </div>
           </div>
-          <span className="text-gray-500 opacity-0 group-hover:opacity-100 transition text-sm">✎</span>
+          <span className="text-gray-400 hover:text-white text-sm ml-1">✎</span>
         </button>
 
-        {/* Center: action buttons */}
-        <div className="flex items-center gap-2">
-          <ActionButton
-            icon={muted ? (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zM14.98 11.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>
-            ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/></svg>
-            )}
-            label={muted ? 'Unmute' : 'Mute'}
-            active={!muted}
-            danger={muted}
-            onClick={() => setMuted((m) => !m)}
+        {/* Center: action buttons — anchored to viewport center */}
+        <div className="flex-1 flex items-center justify-center gap-2">
+          {/* Mic */}
+          <SplitButton
+            main={
+              <ActionCircle
+                state={muted ? 'danger' : 'active'}
+                title={muted ? 'Unmute' : 'Mute'}
+                onClick={() => setMuted((m) => !m)}
+                icon={
+                  muted ? (
+                    <MicMutedIcon />
+                  ) : (
+                    <MicIcon />
+                  )
+                }
+              />
+            }
+            chevron
           />
-          <ActionButton
-            icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>}
-            label="Camera"
-            active={false}
-            disabled
+
+          {/* Camera */}
+          <SplitButton
+            main={
+              <ActionCircle
+                state="danger"
+                title="Camera (coming soon)"
+                disabled
+                icon={<CamMutedIcon />}
+              />
+            }
+            chevron
           />
-          <ActionButton
-            icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>}
-            label="Share screen"
+
+          {/* Screen share */}
+          <ActionCircle
+            state="neutral"
+            title="Share screen (coming soon)"
             disabled
+            icon={<ScreenShareIcon />}
           />
-          <ActionButton
-            icon={<div className="w-3 h-3 rounded-full bg-red-500" />}
-            label="Record"
-            disabled
+
+          {/* Record */}
+          <SplitButton
+            main={
+              <ActionCircle
+                state="neutral"
+                title="Record (coming soon)"
+                disabled
+                icon={<div className="w-2.5 h-2.5 rounded-full bg-red-500" />}
+              />
+            }
+            chevron
           />
-          <ActionButton
-            icon={<span className="text-lg">😊</span>}
-            label="Emoji"
+
+          {/* Emoji */}
+          <ActionCircle
+            state="neutral"
+            title="Emoji (coming soon)"
             disabled
+            icon={<EmojiIcon />}
           />
         </div>
 
-        {/* Right: people / chat / exit */}
-        <div className="flex items-center gap-3 text-gray-400">
-          <button className="hover:text-white p-2 opacity-50 cursor-not-allowed" title="Calendar (coming soon)" disabled>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zM9 14H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2z"/></svg>
-          </button>
-          <button
-            className={`p-2 relative transition rounded ${panel === 'chat' ? 'text-white bg-white/10' : 'hover:text-white'}`}
+        {/* Right: utility */}
+        <div className="flex items-center gap-1 text-gray-400 flex-shrink-0">
+          <IconButton title="Tools (coming soon)" disabled>
+            <WrenchIcon />
+          </IconButton>
+          <IconButton title="Calendar (coming soon)" disabled>
+            <CalendarIcon />
+          </IconButton>
+          <IconButton
             title="Chat"
+            active={panel === 'chat'}
             onClick={() => openPanel('chat')}
+            badge={chatUnread > 0 && panel !== 'chat' ? (chatUnread > 9 ? '9+' : String(chatUnread)) : undefined}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
-            {chatUnread > 0 && panel !== 'chat' && (
-              <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-                {chatUnread > 9 ? '9+' : chatUnread}
-              </span>
-            )}
-          </button>
-          <button
-            className={`p-2 flex items-center gap-1 transition rounded ${panel === 'people' ? 'text-white bg-white/10' : 'hover:text-white'}`}
+            <ChatIcon />
+          </IconButton>
+          <IconButton
             title="People"
+            active={panel === 'people'}
             onClick={() => openPanel('people')}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-            <span className="text-sm">{peers.size + 1}</span>
-          </button>
+            <PeopleIcon />
+            <span className="ml-1 text-[11px] flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+              {peers.size + 1}
+            </span>
+          </IconButton>
+          <IconButton title="Leave" onClick={onChangeName} danger>
+            <ExitIcon />
+          </IconButton>
         </div>
       </div>
 
@@ -892,6 +940,179 @@ export default function App() {
         </div>
       )}
     </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// Gather-matching bottom bar primitives
+// ──────────────────────────────────────────────
+function GatherLogo() {
+  return (
+    <div className="w-9 h-9 grid grid-cols-2 gap-[3px]" title="Click to Talk">
+      <span className="rounded-full bg-indigo-500" />
+      <span className="rounded-full bg-indigo-400" />
+      <span className="rounded-full bg-indigo-400" />
+      <span className="rounded-full bg-indigo-500" />
+    </div>
+  );
+}
+
+type CircleState = 'active' | 'danger' | 'neutral';
+
+function ActionCircle({
+  icon,
+  state,
+  title,
+  onClick,
+  disabled,
+}: {
+  icon: React.ReactNode;
+  state: CircleState;
+  title: string;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  const base =
+    'w-10 h-10 rounded-full flex items-center justify-center transition flex-shrink-0';
+  let cls: string;
+  if (disabled) {
+    cls = `${base} bg-[#1a2030] text-gray-500 cursor-not-allowed`;
+  } else if (state === 'active') {
+    cls = `${base} bg-emerald-500 text-emerald-950 hover:bg-emerald-400`;
+  } else if (state === 'danger') {
+    cls = `${base} bg-red-500 text-white hover:bg-red-400`;
+  } else {
+    cls = `${base} bg-[#1f2937] text-gray-200 hover:bg-[#2a3346]`;
+  }
+  return (
+    <button onClick={disabled ? undefined : onClick} className={cls} title={title}>
+      {icon}
+    </button>
+  );
+}
+
+function SplitButton({ main, chevron }: { main: React.ReactNode; chevron?: boolean }) {
+  return (
+    <div className="flex items-center">
+      {main}
+      {chevron && (
+        <button
+          className="w-5 h-10 -ml-0.5 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/5 rounded-r-md transition"
+          title="Settings"
+          disabled
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 8l-6 6h12z" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function IconButton({
+  children,
+  title,
+  onClick,
+  disabled,
+  active,
+  danger,
+  badge,
+}: {
+  children: React.ReactNode;
+  title: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  active?: boolean;
+  danger?: boolean;
+  badge?: string;
+}) {
+  let cls = 'relative h-10 px-2.5 rounded-lg flex items-center transition';
+  if (disabled) cls += ' text-gray-600 opacity-50 cursor-not-allowed';
+  else if (danger) cls += ' text-red-400 hover:bg-red-500/10';
+  else if (active) cls += ' text-white bg-white/10';
+  else cls += ' text-gray-400 hover:text-white hover:bg-white/5';
+  return (
+    <button onClick={disabled ? undefined : onClick} className={cls} title={title}>
+      {children}
+      {badge && (
+        <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ── Icons (Material-style) ──────────────────
+function MicIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
+    </svg>
+  );
+}
+function MicMutedIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zM14.98 11.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
+    </svg>
+  );
+}
+function CamMutedIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M21 6.5l-4 4V7c0-.55-.45-1-1-1H9.82L21 17.18V6.5zM3.27 2L2 3.27 4.73 6H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.21 0 .39-.08.54-.18L19.73 21 21 19.73 3.27 2z" />
+    </svg>
+  );
+}
+function ScreenShareIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.11-.9-2-2-2H4c-1.11 0-2 .89-2 2v10c0 1.1.89 2 2 2H0v2h24v-2h-4zM4 16V6h16v10.01L4 16zm9-6.87V7h-2v2.13L8.41 11.7l1.41 1.42L12 10.95l2.18 2.17 1.41-1.42L13 9.13z" />
+    </svg>
+  );
+}
+function EmojiIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z" />
+    </svg>
+  );
+}
+function WrenchIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z" />
+    </svg>
+  );
+}
+function CalendarIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zM9 14H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2z" />
+    </svg>
+  );
+}
+function ChatIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z" />
+    </svg>
+  );
+}
+function PeopleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
+    </svg>
+  );
+}
+function ExitIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 1.99-.9 1.99-2L21 5c0-1.1-.9-2-2-2z" />
+    </svg>
   );
 }
 
