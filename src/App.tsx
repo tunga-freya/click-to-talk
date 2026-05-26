@@ -134,7 +134,7 @@ export default function App() {
   const [peers, setPeers] = useState<Map<string, PeerInfo>>(new Map());
 
   // My position (rendered)
-  const [myPos, setMyPos] = useState({ x: 900, y: 870 });
+  const [myPos, setMyPos] = useState({ x: 1000, y: 400 });
 
   // Viewport
   const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
@@ -153,7 +153,7 @@ export default function App() {
   const myIdentityRef = useRef<string>(getOrCreateIdentity());
 
   const heldKeysRef = useRef<Set<string>>(new Set());
-  const myPosRef = useRef({ x: 900, y: 870 });
+  const myPosRef = useRef({ x: 1000, y: 400 });
   const lastBroadcastRef = useRef(0);
   const lastKeepaliveRef = useRef(0);
 
@@ -554,7 +554,8 @@ export default function App() {
         style={{
           width: MAP_W,
           height: MAP_H,
-          transform: `translate(${camX}px, ${camY}px)`,
+          transform: `translate(${camX}px, ${camY}px) scale(${fitScale})`,
+          transformOrigin: '0 0',
           backgroundImage: 'url(/office-bg.png)',
           backgroundSize: '100% 100%',
           backgroundRepeat: 'no-repeat',
