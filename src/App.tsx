@@ -20,7 +20,8 @@ type CallSignal =
   | { type: 'accept'; from: string; fromName: string; to: string }
   | { type: 'decline'; from: string; fromName: string; to: string }
   | { type: 'cancel'; from: string; fromName: string; to: string }
-  | { type: 'end'; from: string; fromName: string; to: string };
+  | { type: 'end'; from: string; fromName: string; to: string }
+  | { type: 'wave'; from: string; fromName: string; to: string };
 
 // ──────────────────────────────────────────────
 // Identity helpers
@@ -92,6 +93,7 @@ export default function App() {
   const [callStart, setCallStart] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
+  const [waveToast, setWaveToast] = useState<{ name: string; at: number } | null>(null);
 
   const roomRef = useRef<Room | null>(null);
   const myIdentityRef = useRef<string>(getOrCreateIdentity());
@@ -222,6 +224,13 @@ export default function App() {
     return () => clearInterval(interval);
   }, [callState]);
 
+  // Auto-dismiss wave toast after 3s
+  useEffect(() => {
+    if (!waveToast) return;
+    const t = setTimeout(() => setWaveToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [waveToast]);
+
   // ──────────────────────────────────────────────
   // Helpers
   // ──────────────────────────────────────────────
@@ -348,6 +357,19 @@ export default function App() {
           }
           break;
         }
+        case 'wave': {
+          // Someone waved at me — play the wave sound locally
+          try {
+            const audio = new Audio('/wave.wav');
+            audio.volume = 1.0;
+            audio.play().catch((e) => console.warn('wave play blocked', e));
+          } catch (e) {
+            console.warn('wave audio error', e);
+          }
+          // Optional toast
+          setWaveToast({ name: sig.fromName, at: Date.now() });
+          break;
+        }
       }
     },
     [name, sendSignal]
@@ -439,6 +461,16 @@ export default function App() {
       to: callPeer.identity,
     });
     await endCallLocally();
+  };
+
+  const onWave = async (peer: PeerInfo) => {
+    setSelected(null);
+    await sendSignal({
+      type: 'wave',
+      from: myIdentityRef.current,
+      fromName: name,
+      to: peer.identity,
+    });
   };
 
   const onMuteToggle = async () => {
@@ -566,13 +598,20 @@ export default function App() {
                 )}
 
                 {selected === p.identity && callState === 'idle' && (
-                  <div className="absolute top-28 bg-white rounded-xl shadow-2xl p-2 z-10 min-w-36 border border-gray-200">
+                  <div className="absolute top-28 bg-white rounded-xl shadow-2xl p-2 z-10 min-w-40 border border-gray-200 flex flex-col gap-1">
                     <button
                       onClick={() => onTalk(p)}
                       className="w-full px-4 py-2 text-left hover:bg-gray-100 rounded-lg flex items-center gap-2"
                     >
                       <span>🎙</span>
                       <span>Talk</span>
+                    </button>
+                    <button
+                      onClick={() => onWave(p)}
+                      className="w-full px-4 py-2 text-left hover:bg-indigo-50 rounded-lg flex items-center gap-2 text-indigo-600"
+                    >
+                      <span>👋</span>
+                      <span>Wave</span>
                     </button>
                   </div>
                 )}
@@ -639,6 +678,14 @@ export default function App() {
             </div>
           </div>
         </Overlay>
+      )}
+
+      {/* Wave toast */}
+      {waveToast && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-indigo-500 text-white px-6 py-3 rounded-full shadow-xl flex items-center gap-3 z-40 animate-bounce">
+          <span className="text-2xl">👋</span>
+          <span className="font-medium">{waveToast.name} waved at you</span>
+        </div>
       )}
 
       {/* In-call */}
