@@ -11,7 +11,7 @@ import {
 // Constants
 // ──────────────────────────────────────────────
 const MAP_W = 2000;
-const MAP_H = 1104;
+const MAP_H = 925;
 const AVATAR_R = 24; // radius px
 const HEARING_RADIUS = 280; // px — open-floor proximity range
 const HEARING_FULL = 80; // px — open-floor full-volume range
@@ -526,9 +526,15 @@ export default function App() {
     );
   }
 
-  // Camera: world is translated so my avatar is centered in viewport
-  const camX = viewport.w / 2 - myPos.x;
-  const camY = viewport.h / 2 - myPos.y;
+  // Camera: fit the entire office map to the viewport (between top + bottom bars).
+  // Scale to fit, then center horizontally + vertically in the available area.
+  const TOP_BAR_H = 48;
+  const BOTTOM_BAR_H = 64;
+  const availW = viewport.w;
+  const availH = Math.max(200, viewport.h - TOP_BAR_H - BOTTOM_BAR_H);
+  const fitScale = Math.min(availW / MAP_W, availH / MAP_H);
+  const camX = (availW - MAP_W * fitScale) / 2;
+  const camY = TOP_BAR_H + (availH - MAP_H * fitScale) / 2;
 
   // Current zone (mine) and occupant counts per zone
   const myZoneId = getZoneId(myPos.x, myPos.y);
