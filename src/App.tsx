@@ -34,31 +34,26 @@ interface Zone {
   h: number;
 }
 
-// Tight zones — each hugs the actual table/desk furniture (not the surrounding floor).
-// Eyeballed from the office bg. Use the 🔨 mapmaker view (bottom-right) to see them
-// and tell me which to adjust.
 const ZONES: Zone[] = [
-  // Left column — 3 dining/lunch booths (table + chairs only)
-  { id: 'lunch-1', name: 'Lunch 1',           x:  70, y:  385, w: 240, h: 180 },
-  { id: 'lunch-2', name: 'Lunch 2',           x:  70, y:  670, w: 240, h: 180 },
-  { id: 'lunch-3', name: 'Lunch 3',           x:  70, y:  950, w: 240, h: 180 },
+  // Left column — dining/lunch booths
+  { id: 'lunch-1', name: 'Lunch 1',         x:  35, y:  330, w: 310, h: 250 },
+  { id: 'lunch-2', name: 'Lunch 2',         x:  35, y:  640, w: 310, h: 250 },
+  { id: 'lunch-3', name: 'Lunch 3',         x:  35, y:  950, w: 310, h: 250 },
+  { id: 'lunch-4', name: 'Lunch 4',         x:  35, y: 1250, w: 310, h: 260 },
 
-  // Center — desk clusters (the desk and its chair, not corridors)
-  { id: 'desk-alper',     name: "Dr. Alper's Desk", x: 640, y: 410, w: 360, h: 220 },
-  { id: 'desk-coworking', name: 'Co-Working',       x: 500, y: 740, w: 280, h: 180 },
-  { id: 'desk-main',      name: 'Main Desk',        x: 800, y: 720, w: 380, h: 230 },
+  // Center — desk clusters
+  { id: 'desk-alper', name: 'Dr. Alper',    x: 420, y:  370, w: 600, h: 290 },
+  { id: 'desk-co-1', name: 'Co-Working 1',  x: 420, y:  720, w: 380, h: 230 },
+  { id: 'desk-co-2', name: 'Desk Area',     x: 800, y:  720, w: 600, h: 290 },
 
-  // Right side
-  { id: 'tunga-booth',    name: "Tunga's Desk",     x: 1170, y: 430, w: 320, h: 200 },
-  { id: 'can-sam-lounge', name: 'Can Sam Lounge',   x: 1290, y: 720, w: 210, h: 180 },
-  { id: 'omer-desk',      name: "Ömer's Desk",      x: 1120, y: 870, w: 340, h: 130 },
+  // Right side — meeting room + tunga booth
+  { id: 'tunga-booth', name: 'Tunga Booth', x: 1120, y: 390, w: 360, h: 220 },
+  { id: 'meeting-room', name: 'Meeting Room', x: 1100, y: 640, w: 420, h: 320 },
 
-  // Bottom
-  { id: 'misra-lounge',   name: 'Misra Lounge',     x: 400, y: 1060, w: 280, h: 180 },
-  { id: 'misra-desk',     name: "Misra's Desk",     x: 540, y: 1240, w: 320, h: 180 },
-  { id: '1on1-brown',     name: '1-on-1 Brown',     x: 880, y: 1190, w: 220, h: 220 },
-  { id: '1on1-right-a',   name: '1-on-1 A',         x: 1080, y: 1140, w: 220, h: 130 },
-  { id: '1on1-right-b',   name: '1-on-1 B',         x: 1080, y: 1320, w: 220, h: 130 },
+  // Bottom — 1-on-1 booths
+  { id: '1on1-brown', name: '1-on-1 Brown', x: 380, y: 1020, w: 540, h: 280 },
+  { id: '1on1-a',     name: '1-on-1',       x: 990, y: 1170, w: 280, h: 180 },
+  { id: '1on1-b',     name: '1-on-1',       x: 990, y: 1380, w: 280, h: 180 },
 ];
 
 function getZoneId(x: number, y: number): string | null {
@@ -139,9 +134,6 @@ export default function App() {
   // Wave UI
   const [waveToast, setWaveToast] = useState<{ name: string; at: number } | null>(null);
   const [waveMenuFor, setWaveMenuFor] = useState<string | null>(null);
-
-  // Mapmaker view (hammer icon — shows zone overlays so coords can be tuned)
-  const [mapmaker, setMapmaker] = useState(false);
 
   // ──────────────────────────────────────────────
   // Refs
@@ -552,10 +544,11 @@ export default function App() {
           imageRendering: 'pixelated' as any,
         }}
       >
-        {/* Private zone overlays — VISIBLE ONLY in mapmaker view (🔨) */}
-        {mapmaker && ZONES.map((z) => {
+        {/* Private zone overlays — Gather-style: subtle lighter background, no border */}
+        {ZONES.map((z) => {
           const isMine = z.id === myZoneId;
           const count = zoneCounts.get(z.id) ?? 0;
+          if (!isMine && count === 0) return null; // Gather only highlights occupied zones
           return (
             <div
               key={z.id}
@@ -566,26 +559,11 @@ export default function App() {
                 width: z.w,
                 height: z.h,
                 background: isMine
-                  ? 'rgba(236, 72, 153, 0.32)'
-                  : 'rgba(236, 72, 153, 0.16)',
-                border: isMine
-                  ? '3px solid rgba(244, 114, 182, 0.95)'
-                  : '2px dashed rgba(236, 72, 153, 0.55)',
-                boxShadow: isMine ? '0 0 24px rgba(244,114,182,0.7) inset' : 'none',
-                borderRadius: 4,
+                  ? 'rgba(255, 255, 255, 0.22)'
+                  : 'rgba(255, 255, 255, 0.10)',
+                borderRadius: 6,
               }}
-            >
-              <div
-                className="absolute left-1 top-1 px-1.5 py-0.5 rounded text-white text-[10px] font-mono font-bold"
-                style={{ background: 'rgba(0,0,0,0.7)' }}
-              >
-                {z.name}
-                {count > 0 ? ` · ${count}` : ''}
-                <div className="opacity-60 font-normal">
-                  ({z.x},{z.y}) {z.w}×{z.h}
-                </div>
-              </div>
-            </div>
+            />
           );
         })}
 
@@ -712,20 +690,8 @@ export default function App() {
           />
         </div>
 
-        {/* Right: people / chat / mapmaker / exit */}
+        {/* Right: people / chat / exit */}
         <div className="flex items-center gap-3 text-gray-400">
-          <button
-            className={`p-2 transition rounded ${
-              mapmaker ? 'text-pink-400 bg-pink-500/10 ring-1 ring-pink-400/50' : 'hover:text-white'
-            }`}
-            title={mapmaker ? 'Hide private-zone overlays' : 'Mapmaker view — show private zones'}
-            onClick={() => setMapmaker((m) => !m)}
-          >
-            {/* hammer icon */}
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M14.121 4.04L19.96 9.879l-1.414 1.414-1.768-.354-7.071 7.071a2 2 0 1 1-2.828-2.828l7.07-7.071-.353-1.768 1.414-1.414zM5.343 18.657l4.243-4.243 1.414 1.414-4.243 4.243-1.414-1.414z"/>
-            </svg>
-          </button>
           <button className="hover:text-white p-2" title="Calendar">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zM9 14H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2z"/></svg>
           </button>
