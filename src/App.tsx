@@ -13,11 +13,59 @@ import {
 const MAP_W = 1546;
 const MAP_H = 1612;
 const AVATAR_R = 24; // radius px
-const HEARING_RADIUS = 280; // px — within this, audio starts
-const HEARING_FULL = 80; // px — within this, full volume
+const HEARING_RADIUS = 280; // px — open-floor proximity range
+const HEARING_FULL = 80; // px — open-floor full-volume range
 const SPEED = 280; // px/sec
 const POS_BROADCAST_HZ = 12; // position sends per second
 const KEEPALIVE_MS = 5000; // re-broadcast position every 5s (so late joiners see us)
+
+// ──────────────────────────────────────────────
+// Private zones (Gather-style "private areas")
+// Inside a zone: only people in the SAME zone hear each other (full volume).
+// Crossing zone boundary instantly cuts/restores audio.
+// Coordinates are in map (image) pixels — eyeballed from the office bg.
+// ──────────────────────────────────────────────
+interface Zone {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const ZONES: Zone[] = [
+  // Left column — dining/lunch booths
+  { id: 'lunch-1', name: 'Lunch 1',         x:  35, y:  330, w: 310, h: 250 },
+  { id: 'lunch-2', name: 'Lunch 2',         x:  35, y:  640, w: 310, h: 250 },
+  { id: 'lunch-3', name: 'Lunch 3',         x:  35, y:  950, w: 310, h: 250 },
+  { id: 'lunch-4', name: 'Lunch 4',         x:  35, y: 1250, w: 310, h: 260 },
+
+  // Center — desk clusters
+  { id: 'desk-alper', name: 'Dr. Alper',    x: 420, y:  370, w: 600, h: 290 },
+  { id: 'desk-co-1', name: 'Co-Working 1',  x: 420, y:  720, w: 380, h: 230 },
+  { id: 'desk-co-2', name: 'Desk Area',     x: 800, y:  720, w: 600, h: 290 },
+
+  // Right side — meeting room + tunga booth
+  { id: 'tunga-booth', name: 'Tunga Booth', x: 1120, y: 390, w: 360, h: 220 },
+  { id: 'meeting-room', name: 'Meeting Room', x: 1100, y: 640, w: 420, h: 320 },
+
+  // Bottom — 1-on-1 booths
+  { id: '1on1-brown', name: '1-on-1 Brown', x: 380, y: 1020, w: 540, h: 280 },
+  { id: '1on1-a',     name: '1-on-1',       x: 990, y: 1170, w: 280, h: 180 },
+  { id: '1on1-b',     name: '1-on-1',       x: 990, y: 1380, w: 280, h: 180 },
+];
+
+function getZoneId(x: number, y: number): string | null {
+  for (const z of ZONES) {
+    if (x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h) return z.id;
+  }
+  return null;
+}
+function getZone(id: string | null): Zone | null {
+  if (!id) return null;
+  return ZONES.find((z) => z.id === id) ?? null;
+}
 
 // ──────────────────────────────────────────────
 // Types
@@ -297,35 +345,56 @@ export default function App() {
     if (!r) return;
 
     const me = myPosRef.current;
-    let anyoneNear = false;
+    const myZone = getZoneId(me.x, me.y);
+    let anyoneAudible = false;
 
     peersRef.current.forEach((peer, id) => {
-      const d = Math.hypot(me.x - peer.x, me.y - peer.y);
-      const isNear = d < HEARING_RADIUS;
-      const was = subscribedRef.current.has(id);
-
       const remote = r.remoteParticipants.get(id);
       if (!remote) return;
 
-      if (isNear && !was) {
+      const peerZone = getZoneId(peer.x, peer.y);
+
+      // ── Determine if I should hear this peer + at what volume
+      // Rule:
+      //  - If I'm in any zone OR peer is in any zone → only same-zone members hear each other
+      //  - Inside the same zone, audio is FULL volume (no distance falloff)
+      //  - If both of us are in the open floor → distance-based proximity
+      let audible = false;
+      let volume = 0;
+
+      if (myZone !== null || peerZone !== null) {
+        if (myZone !== null && myZone === peerZone) {
+          audible = true;
+          volume = 1.0;
+        } else {
+          audible = false;
+        }
+      } else {
+        const d = Math.hypot(me.x - peer.x, me.y - peer.y);
+        if (d < HEARING_RADIUS) {
+          audible = true;
+          if (d <= HEARING_FULL) volume = 1.0;
+          else volume = Math.max(0, 1 - (d - HEARING_FULL) / (HEARING_RADIUS - HEARING_FULL));
+        }
+      }
+
+      const was = subscribedRef.current.has(id);
+      if (audible && !was) {
         remote.audioTrackPublications.forEach((pub) => pub.setSubscribed(true));
         subscribedRef.current.add(id);
-      } else if (!isNear && was) {
+      } else if (!audible && was) {
         remote.audioTrackPublications.forEach((pub) => pub.setSubscribed(false));
         subscribedRef.current.delete(id);
       }
 
-      if (isNear) {
-        anyoneNear = true;
-        let vol: number;
-        if (d <= HEARING_FULL) vol = 1.0;
-        else vol = Math.max(0, 1 - (d - HEARING_FULL) / (HEARING_RADIUS - HEARING_FULL));
+      if (audible) {
+        anyoneAudible = true;
         const el = document.getElementById(`audio-${id}`) as HTMLAudioElement | null;
-        if (el) el.volume = vol;
+        if (el) el.volume = volume;
       }
     });
 
-    const want = anyoneNear && !mutedRef.current;
+    const want = anyoneAudible && !mutedRef.current;
     if (r.localParticipant.isMicrophoneEnabled !== want) {
       r.localParticipant.setMicrophoneEnabled(want).catch(() => {});
     }
@@ -450,6 +519,16 @@ export default function App() {
   const camX = viewport.w / 2 - myPos.x;
   const camY = viewport.h / 2 - myPos.y;
 
+  // Current zone (mine) and occupant counts per zone
+  const myZoneId = getZoneId(myPos.x, myPos.y);
+  const myZone = getZone(myZoneId);
+  const zoneCounts = new Map<string, number>();
+  if (myZoneId) zoneCounts.set(myZoneId, 1);
+  peers.forEach((p) => {
+    const z = getZoneId(p.x, p.y);
+    if (z) zoneCounts.set(z, (zoneCounts.get(z) ?? 0) + 1);
+  });
+
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#0b1020]">
       {/* World layer */}
@@ -465,14 +544,51 @@ export default function App() {
           imageRendering: 'pixelated' as any,
         }}
       >
-        {/* My avatar (with hearing ring) */}
+        {/* Private zone overlays */}
+        {ZONES.map((z) => {
+          const isMine = z.id === myZoneId;
+          const count = zoneCounts.get(z.id) ?? 0;
+          return (
+            <div
+              key={z.id}
+              className="absolute pointer-events-none rounded-md"
+              style={{
+                left: z.x,
+                top: z.y,
+                width: z.w,
+                height: z.h,
+                background: isMine
+                  ? 'rgba(236, 72, 153, 0.32)'
+                  : 'rgba(236, 72, 153, 0.18)',
+                border: isMine
+                  ? '3px solid rgba(244, 114, 182, 0.95)'
+                  : '2px dashed rgba(236, 72, 153, 0.55)',
+                boxShadow: isMine
+                  ? '0 0 24px rgba(244,114,182,0.7) inset'
+                  : 'none',
+              }}
+            >
+              <div
+                className="absolute left-1.5 top-1 px-2 py-0.5 rounded-md text-white text-[11px] font-bold tracking-wide"
+                style={{
+                  background: isMine ? 'rgba(190, 24, 93, 0.95)' : 'rgba(0,0,0,0.55)',
+                  backdropFilter: 'blur(4px)',
+                }}
+              >
+                {z.name}{count > 0 ? ` · ${count}` : ''}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* My avatar (with hearing ring only when in open floor) */}
         <Avatar
           x={myPos.x}
           y={myPos.y}
           name={name + ' (you)'}
           color="#3b82f6"
           isMe
-          showHearingRing
+          showHearingRing={!myZoneId}
         />
 
         {/* Other avatars */}
@@ -500,21 +616,34 @@ export default function App() {
 
       {/* HUD top bar */}
       <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-30 pointer-events-none">
-        <div className="bg-black/55 backdrop-blur px-4 py-2 rounded-2xl text-white text-sm flex items-center gap-3 pointer-events-auto">
-          <span className="flex items-center gap-1">
-            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-gray-400'}`} />
-            {connected ? 'Online' : 'Connecting…'}
-          </span>
-          <span className="opacity-50">·</span>
-          <span><b>{name}</b></span>
-          <span className="opacity-50">·</span>
-          <span>{peers.size + 1} in office</span>
-          <button
-            onClick={onChangeName}
-            className="text-blue-300 hover:text-blue-200 text-xs ml-2"
-          >
-            change
-          </button>
+        <div className="flex flex-col gap-2">
+          <div className="bg-black/55 backdrop-blur px-4 py-2 rounded-2xl text-white text-sm flex items-center gap-3 pointer-events-auto">
+            <span className="flex items-center gap-1">
+              <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-gray-400'}`} />
+              {connected ? 'Online' : 'Connecting…'}
+            </span>
+            <span className="opacity-50">·</span>
+            <span><b>{name}</b></span>
+            <span className="opacity-50">·</span>
+            <span>{peers.size + 1} in office</span>
+            <button
+              onClick={onChangeName}
+              className="text-blue-300 hover:text-blue-200 text-xs ml-2"
+            >
+              change
+            </button>
+          </div>
+          {myZone && (
+            <div className="bg-pink-600/90 backdrop-blur px-4 py-2 rounded-2xl text-white text-sm flex items-center gap-2 pointer-events-auto self-start shadow-lg">
+              <span className="text-base">🔒</span>
+              <span>
+                In <b>{myZone.name}</b>
+                {(zoneCounts.get(myZone.id) ?? 1) > 1
+                  ? ` · ${zoneCounts.get(myZone.id)} people`
+                  : ' · just you'}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="bg-black/55 backdrop-blur px-4 py-2 rounded-2xl text-white text-sm pointer-events-auto flex items-center gap-3">
@@ -530,10 +659,12 @@ export default function App() {
       </div>
 
       {/* Bottom hint */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 bg-black/55 backdrop-blur px-5 py-2 rounded-full text-white text-sm flex items-center gap-4">
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 bg-black/55 backdrop-blur px-5 py-2 rounded-full text-white text-sm flex items-center gap-4 flex-wrap justify-center max-w-[90vw]">
         <span><b>WASD</b> / arrows to move</span>
         <span className="opacity-40">·</span>
-        <span>Walk close to someone to hear them</span>
+        <span>Open floor: walk close to talk</span>
+        <span className="opacity-40">·</span>
+        <span>Pink zones: <b>private</b> — only same-zone talks</span>
         <span className="opacity-40">·</span>
         <span>Click avatar to 👋 <b>Wave</b></span>
       </div>
