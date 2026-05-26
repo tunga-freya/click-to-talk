@@ -13,8 +13,8 @@ import {
 const MAP_W = 2000;
 const MAP_H = 925;
 const AVATAR_R = 24; // radius px
-const HEARING_RADIUS = 130; // px — open-floor proximity range (where audio drops to zero)
-const HEARING_FULL = 45;    // px — open-floor full-volume range
+const HEARING_RADIUS = 65;  // px — open-floor proximity range (where audio drops to zero) — halved per Tunga's request
+const HEARING_FULL = 22;    // px — open-floor full-volume range — halved proportionally
 const SPEED = 280; // px/sec
 const POS_BROADCAST_HZ = 12; // position sends per second
 const KEEPALIVE_MS = 5000; // re-broadcast position every 5s (so late joiners see us)
@@ -86,12 +86,76 @@ interface PeerInfo {
   name: string;
   x: number;
   y: number;
+  dir?: 'left' | 'right';
+  walking?: boolean;
+}
+
+// ──────────────────────────────────────────────
+// Avatar customization
+// ──────────────────────────────────────────────
+type Skin = 'pale' | 'light' | 'tan' | 'brown' | 'dark';
+type HairStyle = 'short' | 'long' | 'bun' | 'bald';
+type HatStyle = 'none' | 'cap' | 'beanie';
+type TopStyle = 'tshirt' | 'longsleeve' | 'sweater';
+type BottomStyle = 'pants' | 'shorts';
+
+interface AvatarConfig {
+  skin: Skin;
+  hair: string;        // hex
+  hairStyle: HairStyle;
+  top: string;         // hex
+  topStyle: TopStyle;
+  bottom: string;      // hex
+  bottomStyle: BottomStyle;
+  shoes: string;       // hex
+  hat: HatStyle;
+  hatColor: string;    // hex
+}
+
+const SKIN_COLORS: Record<Skin, string> = {
+  pale:   '#f5d6b4',
+  light:  '#e8b48a',
+  tan:    '#c79068',
+  brown:  '#8d5c3d',
+  dark:   '#523524',
+};
+
+const PALETTE = [
+  '#ef4444', '#f97316', '#facc15', '#84cc16', '#22c55e', '#14b8a6',
+  '#06b6d4', '#3b82f6', '#6366f1', '#a855f7', '#ec4899', '#f43f5e',
+  '#ffffff', '#9ca3af', '#1f2937', '#7c2d12', '#fef3c7',
+];
+
+const DEFAULT_AVATAR: AvatarConfig = {
+  skin: 'light',
+  hair: '#3a2419',
+  hairStyle: 'short',
+  top: '#3b82f6',
+  topStyle: 'tshirt',
+  bottom: '#1f2937',
+  bottomStyle: 'pants',
+  shoes: '#171717',
+  hat: 'none',
+  hatColor: '#1f2937',
+};
+
+function loadAvatar(): AvatarConfig {
+  try {
+    const raw = localStorage.getItem('ctt_avatar');
+    if (!raw) return DEFAULT_AVATAR;
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_AVATAR, ...parsed };
+  } catch {
+    return DEFAULT_AVATAR;
+  }
 }
 
 type Signal =
-  | { type: 'pos'; from: string; fromName: string; x: number; y: number }
+  | { type: 'pos'; from: string; fromName: string; x: number; y: number; dir: 'left' | 'right'; walking: boolean }
   | { type: 'wave'; from: string; fromName: string; to: string }
-  | { type: 'chat'; from: string; fromName: string; text: string; ts: number };
+  | { type: 'chat'; from: string; fromName: string; text: string; ts: number }
+  | { type: 'avatar'; from: string; config: AvatarConfig }
+  | { type: 'avatar-req'; from: string }; // ask peers to (re)send their avatar configs
 
 interface ChatMessage {
   id: string;
@@ -169,6 +233,25 @@ export default function App() {
   // just pulse a ring around the target avatar for a few seconds.
   const [highlightPeerId, setHighlightPeerId] = useState<string | null>(null);
 
+  // Avatar customization
+  const [myAvatar, setMyAvatar] = useState<AvatarConfig>(() => loadAvatar());
+  const [peerAvatars, setPeerAvatars] = useState<Map<string, AvatarConfig>>(new Map());
+  const [editorOpen, setEditorOpen] = useState(false);
+
+  // Movement direction + walking flag (for animation + sprite flip)
+  const [myDir, setMyDir] = useState<'left' | 'right'>('right');
+  const [myWalking, setMyWalking] = useState(false);
+
+  // Camera + screen share
+  const [cameraOn, setCameraOn] = useState(false);
+  const [screenShareOn, setScreenShareOn] = useState(false);
+  const [camError, setCamError] = useState<string | null>(null);
+  // Video stream URLs per peer (object URLs from MediaStream → HTMLVideoElement attach is done imperatively)
+  const [peerCams, setPeerCams] = useState<Set<string>>(new Set());      // who has camera on
+  const [peerShares, setPeerShares] = useState<Set<string>>(new Set());  // who is screen-sharing
+  // Identity of peer whose screen-share we're currently viewing full-size; null = no viewer
+  const [shareViewerPeer, setShareViewerPeer] = useState<string | null>(null);
+
   // ──────────────────────────────────────────────
   // Refs
   // ──────────────────────────────────────────────
@@ -181,12 +264,19 @@ export default function App() {
   const lastKeepaliveRef = useRef(0);
 
   const subscribedRef = useRef<Set<string>>(new Set());
+  const videoSubsRef = useRef<Set<string>>(new Set()); // peers whose camera/share tracks we're subscribed to
 
   const mutedRef = useRef(false);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
 
+  const myAvatarRef = useRef<AvatarConfig>(myAvatar);
+  useEffect(() => { myAvatarRef.current = myAvatar; }, [myAvatar]);
+
   const peersRef = useRef<Map<string, PeerInfo>>(new Map());
   useEffect(() => { peersRef.current = peers; }, [peers]);
+
+  const myDirRef = useRef<'left' | 'right'>('right');
+  useEffect(() => { myDirRef.current = myDir; }, [myDir]);
 
   // ──────────────────────────────────────────────
   // Window resize
@@ -213,6 +303,8 @@ export default function App() {
         fromName: name,
         x: pos.x,
         y: pos.y,
+        dir: myDirRef.current,
+        walking: heldKeysRef.current.size > 0,
       };
       const data = new TextEncoder().encode(JSON.stringify(msg));
       await r.localParticipant.publishData(data, { reliable: false });
@@ -220,6 +312,32 @@ export default function App() {
       console.warn('broadcast failed', e);
     }
   }, [name]);
+
+  const broadcastAvatar = useCallback(async () => {
+    const r = roomRef.current;
+    if (!r) return;
+    try {
+      const msg: Signal = {
+        type: 'avatar',
+        from: myIdentityRef.current,
+        config: myAvatarRef.current,
+      };
+      const data = new TextEncoder().encode(JSON.stringify(msg));
+      await r.localParticipant.publishData(data, { reliable: true });
+    } catch (e) {
+      console.warn('avatar broadcast failed', e);
+    }
+  }, []);
+
+  const requestPeerAvatars = useCallback(async () => {
+    const r = roomRef.current;
+    if (!r) return;
+    try {
+      const msg: Signal = { type: 'avatar-req', from: myIdentityRef.current };
+      const data = new TextEncoder().encode(JSON.stringify(msg));
+      await r.localParticipant.publishData(data, { reliable: true });
+    } catch {}
+  }, []);
 
   // ──────────────────────────────────────────────
   // Signal handling
@@ -233,9 +351,20 @@ export default function App() {
           name: msg.fromName,
           x: msg.x,
           y: msg.y,
+          dir: msg.dir,
+          walking: msg.walking,
         });
         return next;
       });
+    } else if (msg.type === 'avatar') {
+      setPeerAvatars((prev) => {
+        const next = new Map(prev);
+        next.set(msg.from, msg.config);
+        return next;
+      });
+    } else if (msg.type === 'avatar-req') {
+      // Someone (newcomer) wants to see my avatar — send it back
+      void broadcastAvatar();
     } else if (msg.type === 'wave') {
       if (msg.to !== myIdentityRef.current) return;
       try {
@@ -286,7 +415,9 @@ export default function App() {
         room = new Room({ adaptiveStream: false, dynacast: false });
 
         room.on(RoomEvent.ParticipantConnected, () => {
+          // Tell new arrival our position and avatar so they render us correctly
           broadcastPos(myPosRef.current, true);
+          broadcastAvatar();
         });
 
         room.on(RoomEvent.ParticipantDisconnected, (p) => {
@@ -295,7 +426,24 @@ export default function App() {
             next.delete(p.identity);
             return next;
           });
+          setPeerAvatars((prev) => {
+            const next = new Map(prev);
+            next.delete(p.identity);
+            return next;
+          });
+          setPeerCams((prev) => {
+            const next = new Set(prev);
+            next.delete(p.identity);
+            return next;
+          });
+          setPeerShares((prev) => {
+            const next = new Set(prev);
+            next.delete(p.identity);
+            return next;
+          });
+          setShareViewerPeer((cur) => (cur === p.identity ? null : cur));
           subscribedRef.current.delete(p.identity);
+          videoSubsRef.current.delete(p.identity);
         });
 
         room.on(RoomEvent.DataReceived, (payload, participant) => {
@@ -760,105 +908,91 @@ export default function App() {
         </div>
       </div>
 
-      {/* Bottom action bar — Gather-style (pixel-matched) */}
+      {/* Bottom action bar — Freya pixel-match */}
       <div
-        className="absolute bottom-0 left-0 right-0 bg-[#0b1018] border-t border-black/40 flex items-center z-30 text-white"
-        style={{ height: 64, paddingLeft: 0, paddingRight: 16 }}
+        className="absolute bottom-0 left-0 right-0 bg-[#0b1220] flex items-center z-30 text-white"
+        style={{ height: 64, paddingLeft: 8, paddingRight: 8, gap: 8 }}
       >
-        {/* Far left: Gather-style logo block */}
-        <div className="flex-shrink-0 w-14 h-full flex items-center justify-center border-r border-white/5">
-          <GatherLogo />
+        {/* Far left: Freya logo box */}
+        <div
+          className="flex-shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center"
+          style={{ background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' }}
+          title="Freya"
+        >
+          <img src="/freya-logo.svg" alt="Freya" className="w-7 h-7" />
         </div>
 
-        {/* Left: avatar + name/status + edit pencil */}
+        {/* Avatar pill: webcam thumb + name/status + edit pencil */}
         <button
           onClick={onChangeName}
-          className="flex items-center gap-2.5 hover:bg-white/5 h-full px-3 transition flex-shrink-0"
+          className="flex items-center gap-2.5 bg-[#1a2236] hover:bg-[#222b46] h-12 rounded-2xl pl-1.5 pr-3 transition flex-shrink-0"
           title="Change name"
         >
-          <div className="relative flex-shrink-0">
+          <div className="relative w-9 h-9 rounded-xl overflow-hidden flex-shrink-0">
             <div
-              className="w-10 h-10 rounded-[10px] flex items-center justify-center text-white font-bold text-lg shadow-inner"
+              className="absolute inset-0 flex items-center justify-center text-white font-bold text-lg"
               style={{ backgroundColor: colorFor(myIdentityRef.current) }}
             >
               {name[0]?.toUpperCase()}
             </div>
+            <div className="absolute top-0 left-0 text-[8px] font-medium text-white/90 bg-black/40 px-1 rounded-br-md leading-none py-0.5">
+              1.00
+            </div>
             <div
-              className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-[#0b1018] ${
+              className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-[#1a2236] ${
                 connected ? 'bg-green-500' : 'bg-gray-500'
               }`}
             />
           </div>
           <div className="text-left min-w-0">
-            <div className="font-semibold text-[13px] leading-tight truncate max-w-[120px]">{name}</div>
-            <div className="text-gray-400 text-[11px] leading-tight truncate max-w-[120px]">
+            <div className="font-semibold text-[13px] leading-tight truncate max-w-[100px]">{name}</div>
+            <div className="text-gray-400 text-[12px] leading-tight truncate max-w-[100px]">
               {myZone ? myZone.name : 'hello'}
             </div>
           </div>
-          <span className="text-gray-400 hover:text-white text-sm ml-1">✎</span>
+          <PencilIcon />
         </button>
 
-        {/* Center: action buttons — anchored to viewport center */}
+        {/* Center: action buttons */}
         <div className="flex-1 flex items-center justify-center gap-2">
-          {/* Mic */}
-          <SplitButton
-            main={
-              <ActionCircle
-                state={muted ? 'danger' : 'active'}
-                title={muted ? 'Unmute' : 'Mute'}
-                onClick={() => setMuted((m) => !m)}
-                icon={
-                  muted ? (
-                    <MicMutedIcon />
-                  ) : (
-                    <MicIcon />
-                  )
-                }
-              />
-            }
-            chevron
+          {/* Mic — teal capsule with chevron */}
+          <CapsuleButton
+            variant={muted ? 'danger' : 'teal'}
+            icon={muted ? <MicMutedIcon /> : <MicIcon />}
+            title={muted ? 'Unmute' : 'Mute'}
+            onClick={() => setMuted((m) => !m)}
           />
 
-          {/* Camera */}
-          <SplitButton
-            main={
-              <ActionCircle
-                state="danger"
-                title="Camera (coming soon)"
-                disabled
-                icon={<CamMutedIcon />}
-              />
-            }
-            chevron
+          {/* Camera — teal capsule with chevron (disabled placeholder) */}
+          <CapsuleButton
+            variant="teal"
+            icon={<CamIcon />}
+            title="Camera (coming soon)"
+            disabled
           />
 
-          {/* Screen share */}
-          <ActionCircle
-            state="neutral"
+          {/* Screen share — plain dark circle */}
+          <CircleButton
+            icon={<ScreenShareIcon />}
             title="Share screen (coming soon)"
             disabled
-            icon={<ScreenShareIcon />}
           />
 
-          {/* Record */}
-          <SplitButton
-            main={
-              <ActionCircle
-                state="neutral"
-                title="Record (coming soon)"
-                disabled
-                icon={<div className="w-2.5 h-2.5 rounded-full bg-red-500" />}
-              />
+          {/* Record — dark capsule with chevron */}
+          <CapsuleButton
+            variant="dark"
+            icon={
+              <span className="w-3 h-3 rounded-full border-2 border-white inline-block" />
             }
-            chevron
+            title="Record (coming soon)"
+            disabled
           />
 
-          {/* Emoji */}
-          <ActionCircle
-            state="neutral"
+          {/* Emoji — plain dark circle */}
+          <CircleButton
+            icon={<EmojiIcon />}
             title="Emoji (coming soon)"
             disabled
-            icon={<EmojiIcon />}
           />
         </div>
 
@@ -944,9 +1078,10 @@ export default function App() {
 }
 
 // ──────────────────────────────────────────────
-// Gather-matching bottom bar primitives
+// Gather/Freya-matching bottom bar primitives
 // ──────────────────────────────────────────────
 function GatherLogo() {
+  // (kept for backwards compat — not used anymore; FreyaLogo SVG via <img> replaces it)
   return (
     <div className="w-9 h-9 grid grid-cols-2 gap-[3px]" title="Click to Talk">
       <span className="rounded-full bg-indigo-500" />
@@ -954,6 +1089,115 @@ function GatherLogo() {
       <span className="rounded-full bg-indigo-400" />
       <span className="rounded-full bg-indigo-500" />
     </div>
+  );
+}
+
+type CapsuleVariant = 'teal' | 'dark' | 'danger';
+
+function CapsuleButton({
+  icon,
+  title,
+  variant,
+  onClick,
+  disabled,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  variant: CapsuleVariant;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  // Background per state — picked to visually match Gather's dark teal capsule + the
+  // dark navy record capsule + the red muted state.
+  let bg = '';
+  let mainText = '';
+  let chevronText = '';
+  let sepBorder = '';
+  let hover = '';
+  if (variant === 'teal') {
+    bg = 'bg-[#0e3d3a]';
+    mainText = 'text-emerald-200';
+    chevronText = 'text-emerald-300';
+    sepBorder = 'border-emerald-900/60';
+    hover = 'hover:bg-[#114a45]';
+  } else if (variant === 'danger') {
+    bg = 'bg-red-600';
+    mainText = 'text-white';
+    chevronText = 'text-white/90';
+    sepBorder = 'border-red-800/70';
+    hover = 'hover:bg-red-500';
+  } else {
+    bg = 'bg-[#1a2236]';
+    mainText = 'text-white';
+    chevronText = 'text-gray-300';
+    sepBorder = 'border-white/10';
+    hover = 'hover:bg-[#222b46]';
+  }
+  const disabledCls = disabled ? 'opacity-60 cursor-not-allowed' : `cursor-pointer ${hover}`;
+  return (
+    <div className={`flex items-center h-12 rounded-full ${bg} ${disabledCls} transition`}>
+      <button
+        onClick={disabled ? undefined : onClick}
+        disabled={disabled}
+        className={`flex items-center justify-center h-12 w-11 ${mainText} disabled:cursor-not-allowed`}
+        title={title}
+      >
+        {icon}
+      </button>
+      <div className={`h-6 border-l ${sepBorder}`} />
+      <button
+        disabled
+        className={`flex items-center justify-center h-12 w-7 ${chevronText} disabled:cursor-not-allowed`}
+        title="Settings (coming soon)"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+function CircleButton({
+  icon,
+  title,
+  onClick,
+  disabled,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  const base = 'w-12 h-12 rounded-full flex items-center justify-center transition flex-shrink-0';
+  const cls = disabled
+    ? `${base} bg-[#1a2236] text-gray-400 opacity-60 cursor-not-allowed`
+    : `${base} bg-[#1a2236] hover:bg-[#222b46] text-white cursor-pointer`;
+  return (
+    <button
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      className={cls}
+      title={title}
+    >
+      {icon}
+    </button>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="text-gray-400">
+      <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+    </svg>
+  );
+}
+
+function CamIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
+    </svg>
   );
 }
 
