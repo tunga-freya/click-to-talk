@@ -544,40 +544,26 @@ export default function App() {
           imageRendering: 'pixelated' as any,
         }}
       >
-        {/* Private zone overlays */}
+        {/* Private zone overlays — Gather-style: subtle lighter background, no border */}
         {ZONES.map((z) => {
           const isMine = z.id === myZoneId;
           const count = zoneCounts.get(z.id) ?? 0;
+          if (!isMine && count === 0) return null; // Gather only highlights occupied zones
           return (
             <div
               key={z.id}
-              className="absolute pointer-events-none rounded-md"
+              className="absolute pointer-events-none"
               style={{
                 left: z.x,
                 top: z.y,
                 width: z.w,
                 height: z.h,
                 background: isMine
-                  ? 'rgba(236, 72, 153, 0.32)'
-                  : 'rgba(236, 72, 153, 0.18)',
-                border: isMine
-                  ? '3px solid rgba(244, 114, 182, 0.95)'
-                  : '2px dashed rgba(236, 72, 153, 0.55)',
-                boxShadow: isMine
-                  ? '0 0 24px rgba(244,114,182,0.7) inset'
-                  : 'none',
+                  ? 'rgba(255, 255, 255, 0.22)'
+                  : 'rgba(255, 255, 255, 0.10)',
+                borderRadius: 6,
               }}
-            >
-              <div
-                className="absolute left-1.5 top-1 px-2 py-0.5 rounded-md text-white text-[11px] font-bold tracking-wide"
-                style={{
-                  background: isMine ? 'rgba(190, 24, 93, 0.95)' : 'rgba(0,0,0,0.55)',
-                  backdropFilter: 'blur(4px)',
-                }}
-              >
-                {z.name}{count > 0 ? ` · ${count}` : ''}
-              </div>
-            </div>
+            />
           );
         })}
 
@@ -595,6 +581,7 @@ export default function App() {
         {Array.from(peers.values()).map((p) => {
           const d = Math.hypot(myPos.x - p.x, myPos.y - p.y);
           const near = d < HEARING_RADIUS;
+          const peerZone = getZone(getZoneId(p.x, p.y));
           return (
             <Avatar
               key={p.identity}
@@ -603,8 +590,10 @@ export default function App() {
               name={p.name}
               color={colorFor(p.identity)}
               near={near}
+              zoneName={peerZone?.name ?? null}
               onClick={() => setWaveMenuFor(waveMenuFor === p.identity ? null : p.identity)}
               menuOpen={waveMenuFor === p.identity}
+              onCloseMenu={() => setWaveMenuFor(null)}
               onWave={() => {
                 sendWave(p.identity);
                 setWaveMenuFor(null);
@@ -614,59 +603,106 @@ export default function App() {
         })}
       </div>
 
-      {/* HUD top bar */}
-      <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-30 pointer-events-none">
-        <div className="flex flex-col gap-2">
-          <div className="bg-black/55 backdrop-blur px-4 py-2 rounded-2xl text-white text-sm flex items-center gap-3 pointer-events-auto">
-            <span className="flex items-center gap-1">
-              <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-gray-400'}`} />
-              {connected ? 'Online' : 'Connecting…'}
+      {/* Top bar — Gather-style */}
+      <div className="absolute top-0 left-0 right-0 h-12 bg-[#0e1320]/95 backdrop-blur border-b border-white/5 flex items-center justify-between px-4 z-30 text-white">
+        <div className="flex items-center gap-3 text-gray-400 text-sm">
+          <button className="hover:text-white opacity-70" title="Copy invite link">🔗</button>
+          <button className="hover:text-white opacity-70" title="Privacy">🔓</button>
+          {peers.size > 0 && (
+            <span className="flex items-center gap-1 opacity-80">
+              <span>👥</span>
+              <span>{peers.size + 1}</span>
             </span>
-            <span className="opacity-50">·</span>
-            <span><b>{name}</b></span>
-            <span className="opacity-50">·</span>
-            <span>{peers.size + 1} in office</span>
-            <button
-              onClick={onChangeName}
-              className="text-blue-300 hover:text-blue-200 text-xs ml-2"
-            >
-              change
-            </button>
-          </div>
-          {myZone && (
-            <div className="bg-pink-600/90 backdrop-blur px-4 py-2 rounded-2xl text-white text-sm flex items-center gap-2 pointer-events-auto self-start shadow-lg">
-              <span className="text-base">🔒</span>
-              <span>
-                In <b>{myZone.name}</b>
-                {(zoneCounts.get(myZone.id) ?? 1) > 1
-                  ? ` · ${zoneCounts.get(myZone.id)} people`
-                  : ' · just you'}
-              </span>
-            </div>
           )}
         </div>
 
-        <div className="bg-black/55 backdrop-blur px-4 py-2 rounded-2xl text-white text-sm pointer-events-auto flex items-center gap-3">
-          <button
-            onClick={() => setMuted((m) => !m)}
-            className={`px-3 py-1 rounded-lg font-medium ${
-              muted ? 'bg-yellow-500 text-black' : 'bg-white/10 hover:bg-white/20'
-            }`}
-          >
-            {muted ? '🔇 Muted' : '🎙 Mic on'}
+        <button className="flex items-center gap-2 text-sm font-medium hover:bg-white/5 px-3 py-1.5 rounded-lg transition">
+          <span className="text-pink-400">📍</span>
+          <span>{myZone ? myZone.name : 'Open floor'}</span>
+          <span className="text-gray-500 text-xs">▾</span>
+        </button>
+
+        <div className="flex items-center gap-2">
+          <button className="text-sm px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 flex items-center gap-2 font-medium">
+            <span>🗺</span>
+            <span>Map view</span>
           </button>
+          <button className="text-gray-400 hover:text-white p-1">⋮</button>
         </div>
       </div>
 
-      {/* Bottom hint */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 bg-black/55 backdrop-blur px-5 py-2 rounded-full text-white text-sm flex items-center gap-4 flex-wrap justify-center max-w-[90vw]">
-        <span><b>WASD</b> / arrows to move</span>
-        <span className="opacity-40">·</span>
-        <span>Open floor: walk close to talk</span>
-        <span className="opacity-40">·</span>
-        <span>Pink zones: <b>private</b> — only same-zone talks</span>
-        <span className="opacity-40">·</span>
-        <span>Click avatar to 👋 <b>Wave</b></span>
+      {/* Bottom action bar — Gather-style */}
+      <div className="absolute bottom-0 left-0 right-0 bg-[#0e1320]/95 backdrop-blur border-t border-white/5 px-4 py-2.5 flex items-center justify-between z-30 text-white">
+        {/* Left: self avatar + name + status */}
+        <button
+          onClick={onChangeName}
+          className="flex items-center gap-3 hover:bg-white/5 rounded-lg px-2 py-1 transition group"
+          title="Change name"
+        >
+          <div className="relative">
+            <div className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold text-lg">
+              {name[0]?.toUpperCase()}
+            </div>
+            <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-[#0e1320] ${connected ? 'bg-green-500' : 'bg-gray-500'}`} />
+          </div>
+          <div className="text-left">
+            <div className="font-medium text-sm leading-tight">{name}</div>
+            <div className="text-gray-400 text-xs leading-tight">
+              {myZone ? `at ${myZone.name}` : 'Open floor'}
+            </div>
+          </div>
+          <span className="text-gray-500 opacity-0 group-hover:opacity-100 transition text-sm">✎</span>
+        </button>
+
+        {/* Center: action buttons */}
+        <div className="flex items-center gap-2">
+          <ActionButton
+            icon={muted ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zM14.98 11.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/></svg>
+            )}
+            label={muted ? 'Unmute' : 'Mute'}
+            active={!muted}
+            danger={muted}
+            onClick={() => setMuted((m) => !m)}
+          />
+          <ActionButton
+            icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>}
+            label="Camera"
+            active={false}
+            disabled
+          />
+          <ActionButton
+            icon={<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>}
+            label="Share screen"
+            disabled
+          />
+          <ActionButton
+            icon={<div className="w-3 h-3 rounded-full bg-red-500" />}
+            label="Record"
+            disabled
+          />
+          <ActionButton
+            icon={<span className="text-lg">😊</span>}
+            label="Emoji"
+            disabled
+          />
+        </div>
+
+        {/* Right: people / chat / exit */}
+        <div className="flex items-center gap-3 text-gray-400">
+          <button className="hover:text-white p-2" title="Calendar">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zM9 14H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2z"/></svg>
+          </button>
+          <button className="hover:text-white p-2 relative" title="Chat">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+          </button>
+          <button className="hover:text-white p-2 flex items-center gap-1" title="People">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+            <span className="text-sm">{peers.size + 1}</span>
+          </button>
+        </div>
       </div>
 
       {/* Error */}
@@ -688,6 +724,49 @@ export default function App() {
 }
 
 // ──────────────────────────────────────────────
+// Action Button (used in bottom bar)
+// ──────────────────────────────────────────────
+interface ActionButtonProps {
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  danger?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+}
+
+function ActionButton({ icon, label, active, danger, disabled, onClick }: ActionButtonProps) {
+  const base = 'relative w-11 h-11 rounded-full flex items-center justify-center transition group';
+  let cls: string;
+  if (disabled) cls = `${base} bg-white/5 text-gray-500 cursor-not-allowed`;
+  else if (danger) cls = `${base} bg-red-500/20 text-red-400 hover:bg-red-500/30`;
+  else if (active) cls = `${base} bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30`;
+  else cls = `${base} bg-white/10 text-gray-200 hover:bg-white/20`;
+  return (
+    <button onClick={disabled ? undefined : onClick} className={cls} title={label}>
+      {icon}
+      {danger && (
+        <span
+          className="absolute inset-0 flex items-center justify-center pointer-events-none"
+          aria-hidden
+        >
+          <span
+            className="block"
+            style={{
+              width: '70%',
+              height: 2,
+              background: 'currentColor',
+              transform: 'rotate(-45deg)',
+              borderRadius: 1,
+            }}
+          />
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ──────────────────────────────────────────────
 // Avatar
 // ──────────────────────────────────────────────
 interface AvatarProps {
@@ -698,13 +777,15 @@ interface AvatarProps {
   isMe?: boolean;
   near?: boolean;
   showHearingRing?: boolean;
+  zoneName?: string | null;
   onClick?: () => void;
   menuOpen?: boolean;
   onWave?: () => void;
+  onCloseMenu?: () => void;
 }
 
 function Avatar({
-  x, y, name, color, isMe, near, showHearingRing, onClick, menuOpen, onWave,
+  x, y, name, color, isMe, near, showHearingRing, zoneName, onClick, menuOpen, onWave, onCloseMenu,
 }: AvatarProps) {
   return (
     <div
@@ -719,7 +800,7 @@ function Avatar({
     >
       {showHearingRing && (
         <div
-          className="absolute rounded-full border-2 border-blue-300/40 pointer-events-none"
+          className="absolute rounded-full border border-white/20 pointer-events-none"
           style={{
             left: AVATAR_R - HEARING_RADIUS,
             top: AVATAR_R - HEARING_RADIUS,
@@ -735,30 +816,100 @@ function Avatar({
         disabled={!onClick}
         className={`relative w-full h-full rounded-full flex items-center justify-center text-white text-xl font-bold shadow-lg transition ${
           onClick ? 'hover:scale-110 cursor-pointer' : 'cursor-default'
-        } ${near ? 'ring-4 ring-green-300/70' : isMe ? 'ring-4 ring-blue-200' : ''}`}
+        } ${near ? 'ring-2 ring-green-300/70' : isMe ? 'ring-2 ring-blue-300/80' : ''}`}
         style={{ backgroundColor: color }}
       >
         {name[0]?.toUpperCase()}
       </button>
 
+      {/* Gather-style name pill: small, dark bg, green dot prefix */}
       <div
-        className="absolute left-1/2 -translate-x-1/2 -bottom-7 text-xs font-semibold text-white whitespace-nowrap px-2 py-0.5 rounded-full"
-        style={{ backgroundColor: isMe ? '#2563ebcc' : '#00000099', backdropFilter: 'blur(4px)' }}
+        className="absolute left-1/2 -translate-x-1/2 -bottom-6 flex items-center gap-1 text-[11px] font-medium text-white whitespace-nowrap px-1.5 py-0.5 rounded-full"
+        style={{ backgroundColor: 'rgba(20, 25, 40, 0.85)', backdropFilter: 'blur(4px)' }}
       >
-        {name}
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+        <span className="pr-0.5">{name}</span>
       </div>
 
       {menuOpen && onWave && (
-        <div className="absolute left-1/2 -translate-x-1/2 top-full mt-6 bg-white rounded-xl shadow-2xl border border-gray-200 z-20">
-          <button
-            onClick={onWave}
-            className="px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-semibold flex items-center gap-2 whitespace-nowrap"
+        <>
+          {/* Backdrop to close on outside click */}
+          <div
+            className="fixed inset-0 z-10"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCloseMenu?.();
+            }}
+          />
+          <div
+            className="absolute left-1/2 -translate-x-1/2 top-full mt-7 bg-[#1a2030] rounded-2xl shadow-2xl border border-white/10 z-20 w-72 p-4 text-left"
+            onClick={(e) => e.stopPropagation()}
           >
-            <span>👋</span>
-            <span>Wave</span>
-          </button>
-        </div>
+            <div className="flex items-start justify-between mb-2">
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  <div
+                    className="w-14 h-14 rounded-full flex items-center justify-center text-white text-2xl font-bold"
+                    style={{ backgroundColor: color }}
+                  >
+                    {name[0]?.toUpperCase()}
+                  </div>
+                  <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-500 ring-2 ring-[#1a2030]" />
+                </div>
+                <div>
+                  <div className="text-white font-bold leading-tight">{name}</div>
+                  <div className="text-gray-400 text-xs mt-0.5">Available</div>
+                </div>
+              </div>
+              <button className="text-gray-400 hover:text-white p-1" title="More">⋮</button>
+            </div>
+
+            <div className="flex items-center gap-1.5 text-gray-400 text-xs mt-2 mb-3">
+              <span className="text-pink-400">📍</span>
+              <span>{zoneName ?? 'Open floor'}</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              <button
+                onClick={onWave}
+                className="bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2.5 rounded-lg flex items-center justify-center gap-2 text-sm"
+              >
+                <span>👋</span>
+                <span>Wave</span>
+              </button>
+              <button
+                disabled
+                className="bg-white/5 text-gray-500 font-semibold py-2.5 rounded-lg flex items-center justify-center gap-2 text-sm cursor-not-allowed"
+                title="Coming soon"
+              >
+                <span>💬</span>
+                <span>Message</span>
+              </button>
+            </div>
+
+            <div className="border-t border-white/10 pt-2 space-y-0.5">
+              <MenuItem icon="👤" label="View profile" disabled />
+              <MenuItem icon="📍" label="Locate on map" disabled />
+              <MenuItem icon="👣" label="Follow" disabled />
+              <MenuItem icon="🚪" label="Request to join me" disabled />
+            </div>
+          </div>
+        </>
       )}
     </div>
+  );
+}
+
+function MenuItem({ icon, label, disabled }: { icon: string; label: string; disabled?: boolean }) {
+  return (
+    <button
+      disabled={disabled}
+      className={`w-full flex items-center gap-3 px-2 py-2 rounded-lg text-sm ${
+        disabled ? 'text-gray-500 cursor-not-allowed' : 'text-white hover:bg-white/5'
+      }`}
+    >
+      <span className="w-5 text-center text-gray-400">{icon}</span>
+      <span>{label}</span>
+    </button>
   );
 }
