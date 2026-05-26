@@ -34,8 +34,38 @@ interface Zone {
   h: number;
 }
 
-// Empty for now — will be filled in from /zone-editor.html after you label the new map.
-const ZONES: Zone[] = [];
+// Generated via /zone-editor.html — Tunga's labeled private areas on the new 2000×1104 map.
+const ZONES: Zone[] = [
+  // Top row of desks (Ricky / Alper)
+  { id: 'ricky',       name: 'Ricky',       x: 707,  y: 270, w: 116, h: 70 },
+  { id: 'alper',       name: 'Alper',       x: 942,  y: 269, w: 114, h: 71 },
+
+  // Second row (Yavuz / Ahmet / Tunga)
+  { id: 'yavuz',       name: 'Yavuz',       x: 707,  y: 342, w: 117, h: 75 },
+  { id: 'ahmet',       name: 'Ahmet',       x: 825,  y: 341, w: 120, h: 76 },
+  { id: 'tunga',       name: 'Tunga',       x: 945,  y: 345, w: 110, h: 72 },
+
+  // Center cluster (Yunus Emre / Tom / Can)
+  { id: 'yunus-emre',  name: 'Yunus Emre',  x: 902,  y: 462, w: 116, h: 74 },
+  { id: 'tom',         name: 'Tom',         x: 1018, y: 463, w: 114, h: 73 },
+  { id: 'can',         name: 'Can',         x: 1132, y: 464, w: 123, h: 73 },
+
+  // Lower center (Yusuf / Mustafa / Omer)
+  { id: 'yusuf',       name: 'Yusuf',       x: 902,  y: 537, w: 116, h: 80 },
+  { id: 'mustafa',     name: 'Mustafa',     x: 1017, y: 538, w: 118, h: 77 },
+  { id: 'omer',        name: 'Omer',        x: 1135, y: 538, w: 114, h: 76 },
+
+  // Bottom row (Yalin / Serkan / Misra)
+  { id: 'yalin',       name: 'Yalin',       x: 673,  y: 655, w: 114, h: 74 },
+  { id: 'serkan',      name: 'Serkan',      x: 787,  y: 656, w: 115, h: 71 },
+  { id: 'misra',       name: 'Misra',       x: 905,  y: 656, w: 116, h: 73 },
+
+  // Shared rooms
+  { id: 'meeting-room', name: 'Meeting Room', x: 1328, y: 112, w: 306, h: 236 },
+  { id: 'table-1',     name: 'Table 1',     x: 1100, y: 271, w: 148, h: 117 },
+  { id: 'table-2',     name: 'Table 2',     x: 712,  y: 457, w: 153, h: 120 },
+  { id: '1-1-room',    name: '1-1 Room',    x: 1140, y: 692, w: 106, h:  39 },
+];
 
 function getZoneId(x: number, y: number): string | null {
   for (const z of ZONES) {
@@ -104,7 +134,7 @@ export default function App() {
   const [peers, setPeers] = useState<Map<string, PeerInfo>>(new Map());
 
   // My position (rendered)
-  const [myPos, setMyPos] = useState({ x: 1000, y: 500 });
+  const [myPos, setMyPos] = useState({ x: 900, y: 870 });
 
   // Viewport
   const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
@@ -123,7 +153,7 @@ export default function App() {
   const myIdentityRef = useRef<string>(getOrCreateIdentity());
 
   const heldKeysRef = useRef<Set<string>>(new Set());
-  const myPosRef = useRef({ x: 1000, y: 500 });
+  const myPosRef = useRef({ x: 900, y: 870 });
   const lastBroadcastRef = useRef(0);
   const lastKeepaliveRef = useRef(0);
 
