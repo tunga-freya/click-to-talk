@@ -6,6 +6,8 @@ import {
   RemoteTrack,
   RemoteTrackPublication,
 } from 'livekit-client';
+import { useRecording } from './recording';
+import { JohnPorkButton, JohnPorkSprite } from './JohnPork';
 
 // ──────────────────────────────────────────────
 // Constants
@@ -252,6 +254,15 @@ export default function App() {
   // Identity of peer whose screen-share we're currently viewing full-size; null = no viewer
   const [shareViewerPeer, setShareViewerPeer] = useState<string | null>(null);
 
+  // John Pork recording — when summoned, a little pig appears next to me on the
+  // map and a low-bitrate webm of the screen + mixed audio is recorded. On stop,
+  // the file auto-downloads (and posts to /api/upload-recording for Drive sync
+  // if credentials are configured server-side).
+  const [summoned, setSummoned] = useState(false);
+  const [recStartAt, setRecStartAt] = useState<number | null>(null);
+  const [recTick, setRecTick] = useState(0); // forces timer re-render
+  const [recError, setRecError] = useState<string | null>(null);
+
   // ──────────────────────────────────────────────
   // Refs
   // ──────────────────────────────────────────────
@@ -277,6 +288,42 @@ export default function App() {
 
   const myDirRef = useRef<'left' | 'right'>('right');
   useEffect(() => { myDirRef.current = myDir; }, [myDir]);
+
+  // Local camera preview (bottom-left webcam thumb)
+  const selfVideoRef = useRef<HTMLVideoElement>(null);
+
+  // Attach local camera track to the self-preview <video> whenever camera turns on.
+  useEffect(() => {
+    if (!cameraOn) return;
+    const r = roomRef.current;
+    const el = selfVideoRef.current;
+    if (!r || !el) return;
+    const tryAttach = () => {
+      for (const pub of r.localParticipant.videoTrackPublications.values()) {
+        if (pub.source === Track.Source.Camera && pub.track) {
+          pub.track.attach(el);
+          return true;
+        }
+      }
+      return false;
+    };
+    if (!tryAttach()) {
+      const t = setTimeout(tryAttach, 200);
+      return () => clearTimeout(t);
+    }
+  }, [cameraOn]);
+
+  // John Pork recording resources (refs so cleanup can find them on unmount)
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recChunksRef = useRef<Blob[]>([]);
+  const recStreamsRef = useRef<{ display?: MediaStream; mic?: MediaStream; ctx?: AudioContext }>({});
+
+  // Tick recording timer every second so the badge updates
+  useEffect(() => {
+    if (recStartAt === null) return;
+    const t = window.setInterval(() => setRecTick((n) => n + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [recStartAt]);
 
   // ──────────────────────────────────────────────
   // Window resize
@@ -458,9 +505,6 @@ export default function App() {
 
         room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, pub, participant) => {
           if (track.kind === Track.Kind.Audio) {
-            // Defensive: remove any orphaned audio elements for this peer that didn't
-            // get cleaned up by a prior TrackUnsubscribed (race condition when leaving
-            // one zone and entering another quickly).
             document
               .querySelectorAll(`audio[data-peer-id="${participant.identity}"]`)
               .forEach((n) => n.remove());
@@ -469,23 +513,65 @@ export default function App() {
             el.id = `audio-${participant.identity}-${pub.trackSid}`;
             el.dataset.peerId = participant.identity;
             el.autoplay = true;
-            // Initial volume: compute from CURRENT proximity so we don't have a
-            // silent gap until the next tick.
             el.volume = computeVolumeFor(participant.identity);
             document.body.appendChild(el);
+          } else if (track.kind === Track.Kind.Video) {
+            // Camera vs screen share are different track sources
+            const isShare = pub.source === Track.Source.ScreenShare;
+            const wrapId = isShare ? `share-${participant.identity}` : `cam-${participant.identity}`;
+            // Remove any orphan
+            document.querySelectorAll(`video[data-vid="${wrapId}"]`).forEach((n) => n.remove());
+            const el = track.attach() as HTMLVideoElement;
+            el.dataset.vid = wrapId;
+            el.dataset.peerId = participant.identity;
+            el.dataset.kind = isShare ? 'share' : 'cam';
+            el.autoplay = true;
+            el.muted = true; // audio is in the audio track; avoid double playback
+            el.playsInline = true;
+            // Hidden source — actual rendering is done by a React <video> with srcObject
+            el.style.display = 'none';
+            document.body.appendChild(el);
+            if (isShare) {
+              setPeerShares((prev) => new Set(prev).add(participant.identity));
+            } else {
+              setPeerCams((prev) => new Set(prev).add(participant.identity));
+            }
           }
         });
 
-        room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack, _pub, participant) => {
+        room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack, pub, participant) => {
           track.detach().forEach((el) => el.remove());
-          // Belt + suspenders: remove any leftover audio elements tagged for this peer.
-          document
-            .querySelectorAll(`audio[data-peer-id="${participant.identity}"]`)
-            .forEach((n) => n.remove());
+          if (track.kind === Track.Kind.Audio) {
+            document
+              .querySelectorAll(`audio[data-peer-id="${participant.identity}"]`)
+              .forEach((n) => n.remove());
+          } else if (track.kind === Track.Kind.Video) {
+            const isShare = pub.source === Track.Source.ScreenShare;
+            if (isShare) {
+              setPeerShares((prev) => {
+                const next = new Set(prev); next.delete(participant.identity); return next;
+              });
+              setShareViewerPeer((cur) => (cur === participant.identity ? null : cur));
+            } else {
+              setPeerCams((prev) => {
+                const next = new Set(prev); next.delete(participant.identity); return next;
+              });
+            }
+          }
         });
 
         room.on(RoomEvent.TrackPublished, (pub: RemoteTrackPublication, participant) => {
-          if (subscribedRef.current.has(participant.identity) && pub.kind === Track.Kind.Audio) {
+          // Audio: subscribe if proximity already approved
+          if (pub.kind === Track.Kind.Audio && subscribedRef.current.has(participant.identity)) {
+            pub.setSubscribed(true);
+          }
+          // Camera video: subscribe if proximity already approved
+          if (pub.kind === Track.Kind.Video && pub.source === Track.Source.Camera &&
+              videoSubsRef.current.has(participant.identity)) {
+            pub.setSubscribed(true);
+          }
+          // Screen share: ALWAYS subscribe regardless of proximity (broadcast)
+          if (pub.kind === Track.Kind.Video && pub.source === Track.Source.ScreenShare) {
             pub.setSubscribed(true);
           }
         });
@@ -503,6 +589,9 @@ export default function App() {
         roomRef.current = room;
         setConnected(true);
         broadcastPos(myPosRef.current, true);
+        // Tell existing peers about my avatar and ask for theirs
+        await broadcastAvatar();
+        await requestPeerAvatars();
       } catch (e: any) {
         console.error('Connect failed', e);
         setError(e?.message ?? 'Failed to connect');
@@ -588,19 +677,32 @@ export default function App() {
       const volume = computeVolumeFor(id);
       const audible = volume > 0;
 
-      const was = subscribedRef.current.has(id);
-      if (audible && !was) {
+      // Audio subscription
+      const wasAudio = subscribedRef.current.has(id);
+      if (audible && !wasAudio) {
         remote.audioTrackPublications.forEach((pub) => pub.setSubscribed(true));
         subscribedRef.current.add(id);
-      } else if (!audible && was) {
+      } else if (!audible && wasAudio) {
         remote.audioTrackPublications.forEach((pub) => pub.setSubscribed(false));
         subscribedRef.current.delete(id);
       }
 
+      // Video subscription (camera) — same proximity rules as audio.
+      // Screen share is always-on subscription when published (it's intentional broadcast).
+      const wasVideo = videoSubsRef.current.has(id);
+      if (audible && !wasVideo) {
+        remote.videoTrackPublications.forEach((pub) => pub.setSubscribed(true));
+        videoSubsRef.current.add(id);
+      } else if (!audible && wasVideo) {
+        remote.videoTrackPublications.forEach((pub) => {
+          // Keep screen-share subscribed always; unsub only camera tracks
+          if (pub.source !== Track.Source.ScreenShare) pub.setSubscribed(false);
+        });
+        videoSubsRef.current.delete(id);
+      }
+
       if (audible) {
         anyoneAudible = true;
-        // Use querySelectorAll so we update every audio element for this peer,
-        // not just the first one found by id (handles stale-element races).
         document
           .querySelectorAll<HTMLAudioElement>(`audio[data-peer-id="${id}"]`)
           .forEach((el) => { el.volume = volume; });
@@ -632,11 +734,24 @@ export default function App() {
       if (k.has('a') || k.has('arrowleft')) dx -= 1;
       if (k.has('d') || k.has('arrowright')) dx += 1;
 
+      const isWalking = (dx !== 0 || dy !== 0);
+      setMyWalking((prev) => (prev === isWalking ? prev : isWalking));
+
       let moved = false;
-      if (dx !== 0 || dy !== 0) {
+      if (isWalking) {
         const len = Math.hypot(dx, dy);
         const nx = clamp(myPosRef.current.x + (dx / len) * SPEED * dt, AVATAR_R, MAP_W - AVATAR_R);
         const ny = clamp(myPosRef.current.y + (dy / len) * SPEED * dt, AVATAR_R, MAP_H - AVATAR_R);
+
+        // Face left or right based on horizontal velocity
+        if (dx > 0 && myDirRef.current !== 'right') {
+          myDirRef.current = 'right';
+          setMyDir('right');
+        } else if (dx < 0 && myDirRef.current !== 'left') {
+          myDirRef.current = 'left';
+          setMyDir('left');
+        }
+
         if (nx !== myPosRef.current.x || ny !== myPosRef.current.y) {
           myPosRef.current = { x: nx, y: ny };
           setMyPos({ x: nx, y: ny });
@@ -753,6 +868,49 @@ export default function App() {
     setPanel('none');
     setWaveMenuFor(null);
   }, []);
+
+  // John Pork recording hook (screen + audio → WebM → download + optional Drive)
+  const johnPork = useRecording(name);
+
+  const toggleCamera = useCallback(async () => {
+    const r = roomRef.current;
+    if (!r) return;
+    setCamError(null);
+    const next = !cameraOn;
+    try {
+      await r.localParticipant.setCameraEnabled(next);
+      setCameraOn(next);
+    } catch (e: any) {
+      console.error('Camera toggle failed', e);
+      setCamError(e?.message ?? 'Camera access denied. Check browser permissions.');
+      setCameraOn(false);
+    }
+  }, [cameraOn]);
+
+  const toggleScreenShare = useCallback(async () => {
+    const r = roomRef.current;
+    if (!r) return;
+    setCamError(null);
+    const next = !screenShareOn;
+    try {
+      await r.localParticipant.setScreenShareEnabled(next, { audio: true });
+      setScreenShareOn(next);
+    } catch (e: any) {
+      console.error('Screen share toggle failed', e);
+      // User cancelling the picker is not an error worth showing
+      if (e?.name !== 'NotAllowedError' || /denied/i.test(String(e?.message))) {
+        setCamError(e?.message ?? 'Screen share failed.');
+      }
+      setScreenShareOn(false);
+    }
+  }, [screenShareOn]);
+
+  const saveAvatar = useCallback((cfg: AvatarConfig) => {
+    setMyAvatar(cfg);
+    myAvatarRef.current = cfg;
+    try { localStorage.setItem('ctt_avatar', JSON.stringify(cfg)); } catch {}
+    void broadcastAvatar();
+  }, [broadcastAvatar]);
 
   // ──────────────────────────────────────────────
   // Render: name entry
@@ -916,7 +1074,7 @@ export default function App() {
         {/* Far left: Freya logo box */}
         <div
           className="flex-shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center"
-          style={{ background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' }}
+          style={{ background: 'linear-gradient(135deg, #1e3a8a 0%, #172554 100%)' }}
           title="Freya"
         >
           <img src="/freya-logo.svg" alt="Freya" className="w-7 h-7" />
@@ -924,20 +1082,23 @@ export default function App() {
 
         {/* Avatar pill: webcam thumb + name/status + edit pencil */}
         <button
-          onClick={onChangeName}
+          onClick={() => setEditorOpen(true)}
           className="flex items-center gap-2.5 bg-[#1a2236] hover:bg-[#222b46] h-12 rounded-2xl pl-1.5 pr-3 transition flex-shrink-0"
-          title="Change name"
+          title="Customize avatar"
         >
-          <div className="relative w-9 h-9 rounded-xl overflow-hidden flex-shrink-0">
-            <div
-              className="absolute inset-0 flex items-center justify-center text-white font-bold text-lg"
-              style={{ backgroundColor: colorFor(myIdentityRef.current) }}
-            >
-              {name[0]?.toUpperCase()}
-            </div>
-            <div className="absolute top-0 left-0 text-[8px] font-medium text-white/90 bg-black/40 px-1 rounded-br-md leading-none py-0.5">
-              1.00
-            </div>
+          <div className="relative w-9 h-9 rounded-xl overflow-hidden flex-shrink-0 bg-[#0e1320] flex items-center justify-center">
+            {cameraOn ? (
+              <video
+                ref={selfVideoRef}
+                autoPlay
+                muted
+                playsInline
+                className="absolute inset-0 w-full h-full object-cover"
+                style={{ transform: 'scaleX(-1)' }}
+              />
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center text-white font-bold text-lg" style={{ backgroundColor: colorFor(myIdentityRef.current) }}>{name[0]?.toUpperCase()}</div>
+            )}
             <div
               className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-[#1a2236] ${
                 connected ? 'bg-green-500' : 'bg-gray-500'
@@ -947,14 +1108,14 @@ export default function App() {
           <div className="text-left min-w-0">
             <div className="font-semibold text-[13px] leading-tight truncate max-w-[100px]">{name}</div>
             <div className="text-gray-400 text-[12px] leading-tight truncate max-w-[100px]">
-              {myZone ? myZone.name : 'hello'}
+              {myZone ? myZone.name : 'Open floor'}
             </div>
           </div>
           <PencilIcon />
         </button>
 
         {/* Center: action buttons */}
-        <div className="flex-1 flex items-center justify-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           {/* Mic — teal capsule with chevron */}
           <CapsuleButton
             variant={muted ? 'danger' : 'teal'}
@@ -965,17 +1126,18 @@ export default function App() {
 
           {/* Camera — teal capsule with chevron (disabled placeholder) */}
           <CapsuleButton
-            variant="teal"
-            icon={<CamIcon />}
-            title="Camera (coming soon)"
-            disabled
+            variant={cameraOn ? 'teal' : 'dark'}
+            icon={cameraOn ? <CamIcon /> : <CamMutedIcon />}
+            title={cameraOn ? 'Turn camera off' : 'Turn camera on'}
+            onClick={toggleCamera}
           />
 
-          {/* Screen share — plain dark circle */}
+          {/* Screen share */}
           <CircleButton
             icon={<ScreenShareIcon />}
-            title="Share screen (coming soon)"
-            disabled
+            title={screenShareOn ? 'Stop sharing screen' : 'Share screen'}
+            onClick={toggleScreenShare}
+            active={screenShareOn}
           />
 
           {/* Record — dark capsule with chevron */}
@@ -995,6 +1157,9 @@ export default function App() {
             disabled
           />
         </div>
+
+        {/* Spacer pushes utility cluster to the right */}
+        <div className="flex-1" />
 
         {/* Right: utility */}
         <div className="flex items-center gap-1 text-gray-400 flex-shrink-0">
@@ -1163,16 +1328,19 @@ function CircleButton({
   title,
   onClick,
   disabled,
+  active,
 }: {
   icon: React.ReactNode;
   title: string;
   onClick?: () => void;
   disabled?: boolean;
+  active?: boolean;
 }) {
   const base = 'w-12 h-12 rounded-full flex items-center justify-center transition flex-shrink-0';
-  const cls = disabled
-    ? `${base} bg-[#1a2236] text-gray-400 opacity-60 cursor-not-allowed`
-    : `${base} bg-[#1a2236] hover:bg-[#222b46] text-white cursor-pointer`;
+  let cls: string;
+  if (disabled) cls = `${base} bg-[#1a2236] text-gray-400 opacity-60 cursor-not-allowed`;
+  else if (active) cls = `${base} bg-emerald-500 text-emerald-950 hover:bg-emerald-400 cursor-pointer`;
+  else cls = `${base} bg-[#1a2236] hover:bg-[#222b46] text-white cursor-pointer`;
   return (
     <button
       onClick={disabled ? undefined : onClick}
