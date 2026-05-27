@@ -869,8 +869,8 @@ export default function App() {
     setWaveMenuFor(null);
   }, []);
 
-  // John Pork recording hook (screen + audio → WebM → download + optional Drive)
-  const johnPork = useRecording(name);
+  // John Pork recording hook — records the live LiveKit call (no extra prompt)
+  const johnPork = useRecording(name, roomRef);
 
   const toggleCamera = useCallback(async () => {
     const r = roomRef.current;
@@ -961,6 +961,22 @@ export default function App() {
     if (z) zoneCounts.set(z, (zoneCounts.get(z) ?? 0) + 1);
   });
 
+  // Which peers can I currently hear? (Same rules as proximity audio.)
+  // Used to populate the screen-share meeting view's camera column.
+  const audiblePeerIds = (() => {
+    const s = new Set<string>();
+    peers.forEach((p) => {
+      const peerZoneId = getZoneId(p.x, p.y);
+      if (myZoneId !== null || peerZoneId !== null) {
+        if (myZoneId !== null && myZoneId === peerZoneId) s.add(p.identity);
+      } else {
+        const d = Math.hypot(myPos.x - p.x, myPos.y - p.y);
+        if (d < HEARING_RADIUS) s.add(p.identity);
+      }
+    });
+    return s;
+  })();
+
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#0b1020]">
       {/* World layer */}
@@ -1014,6 +1030,7 @@ export default function App() {
           hasCamera={cameraOn}
           isScreenSharing={screenShareOn}
           peerId={myIdentityRef.current}
+          onViewScreen={() => setShareViewerPeer(myIdentityRef.current)}
         />
 
         {/* John Pork sprite — appears next to me while recording */}
@@ -1276,7 +1293,11 @@ export default function App() {
       {shareViewerPeer && (
         <ScreenShareLayout
           sharerPeerId={shareViewerPeer}
-          sharerName={peers.get(shareViewerPeer)?.name ?? 'Someone'}
+          sharerName={
+            shareViewerPeer === myIdentityRef.current
+              ? name
+              : peers.get(shareViewerPeer)?.name ?? 'Someone'
+          }
           peers={peers}
           peerCams={peerCams}
           selfName={name}
@@ -1285,6 +1306,7 @@ export default function App() {
           muted={muted}
           selfVideoRef={selfVideoRef}
           colorFor={colorFor}
+          audiblePeerIds={audiblePeerIds}
           onClose={() => setShareViewerPeer(null)}
         />
       )}
@@ -1745,15 +1767,11 @@ function Avatar({
       {/* Screen-share indicator badge above head */}
       {isScreenSharing && (
         <button
-          onClick={isMe ? undefined : onViewScreen}
-          className={`absolute left-1/2 -translate-x-1/2 -top-7 px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center gap-1 z-10 ${
-            isMe
-              ? 'bg-emerald-500 text-emerald-950 cursor-default'
-              : 'bg-emerald-500 text-emerald-950 hover:bg-emerald-400 cursor-pointer'
-          }`}
-          title={isMe ? 'You are sharing your screen' : 'View screen share'}
+          onClick={onViewScreen}
+          className="absolute left-1/2 -translate-x-1/2 -top-7 px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center gap-1 z-10 bg-emerald-500 text-emerald-950 hover:bg-emerald-400 cursor-pointer"
+          title={isMe ? 'Open meeting view (see your share + nearby cameras)' : 'View screen share'}
         >
-          📺 {isMe ? 'Sharing' : 'View'}
+          📺 {isMe ? 'Sharing — open' : 'View'}
         </button>
       )}
 
@@ -2659,6 +2677,7 @@ function ScreenShareLayout({
   selfVideoRef,
   colorFor,
   onClose,
+  audiblePeerIds,
 }: {
   sharerPeerId: string;
   sharerName: string;
@@ -2671,11 +2690,14 @@ function ScreenShareLayout({
   selfVideoRef: React.RefObject<HTMLVideoElement>;
   colorFor: (id: string) => string;
   onClose: () => void;
+  audiblePeerIds: Set<string>;
 }) {
-  // Build the list of tiles for the left column: self + every peer that's currently in the
-  // app (the share is being shown because they're audible/in-proximity, so showing all
-  // remote participants reads true to Gather's layout).
-  const peerList = Array.from(peers.values());
+  // Show only peers I can hear (same zone or within hearing range) — those are
+  // the participants in this "meeting". Always include the sharer even if they
+  // aren't audible (e.g. you opened the share from far away).
+  const peerList = Array.from(peers.values()).filter(
+    (p) => audiblePeerIds.has(p.identity) || p.identity === sharerPeerId
+  );
 
   return (
     <div
@@ -2708,10 +2730,12 @@ function ScreenShareLayout({
       {/* Main share area */}
       <div className="flex-1 bg-[#0a0d14] relative flex items-center justify-center">
         {/* Header strip */}
-        <div className="absolute top-0 left-0 right-0 px-4 py-2 bg-black/40 backdrop-blur-sm text-white flex items-center justify-between text-sm pointer-events-none">
+        <div className="absolute top-0 left-0 right-0 px-4 py-2 bg-black/40 backdrop-blur-sm text-white flex items-center justify-between text-sm pointer-events-none z-10">
           <div className="flex items-center gap-2">
             <span>📺</span>
-            <span className="font-medium">{sharerName}'s screen</span>
+            <span className="font-medium">
+              {sharerPeerId === selfId ? 'Your screen' : `${sharerName}'s screen`}
+            </span>
           </div>
           <button
             onClick={onClose}
@@ -2721,11 +2745,22 @@ function ScreenShareLayout({
             Hide
           </button>
         </div>
-        <PeerVideo
-          peerId={sharerPeerId}
-          kind="share"
-          className="max-w-full max-h-full object-contain"
-        />
+        {sharerPeerId === selfId ? (
+          /* Self-share preview — we don't show the actual capture (avoid loop) but show a clean placeholder + remind user share is live */
+          <div className="flex flex-col items-center justify-center text-white/70 text-center px-8">
+            <div className="text-6xl mb-3">📺</div>
+            <div className="font-semibold mb-1">You're sharing your screen</div>
+            <div className="text-sm text-white/50">
+              Nearby people see it. Their cameras appear on the left.
+            </div>
+          </div>
+        ) : (
+          <PeerVideo
+            peerId={sharerPeerId}
+            kind="share"
+            className="max-w-full max-h-full object-contain"
+          />
+        )}
       </div>
     </div>
   );

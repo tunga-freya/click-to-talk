@@ -1,13 +1,28 @@
-// John Pork recording — self-contained hook + sprite + button.
-// Records screen + mixed audio (mic + tab audio) to a low-bitrate WebM,
-// downloads it locally, and (if the server has Drive creds) uploads it.
+// John Pork recording — records the LIVE call (LiveKit tracks).
+//
+// We do NOT prompt for screen capture. Instead we grab whatever the user
+// has already published to the room (mic, camera, screen share, screen-share
+// audio) and mix it with the audio of every remote peer they're subscribed
+// to. The result is a single low-bitrate WebM that captures the actual
+// conversation on top of whatever was being shared.
+//
+// Source priority for the video track:
+//   1) the user's own screen-share track (most likely what they want)
+//   2) the user's camera
+//   3) the first remote screen-share they're subscribed to
+//   4) the first remote camera
+//   5) audio-only (no video) — file will still play in browsers
+//
+// Audio is always the FULL mix: local mic + screen-share audio + every
+// subscribed remote audio track.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { MutableRefObject } from 'react';
+import { Room, Track } from 'livekit-client';
 
-interface RecorderStreams {
-  display?: MediaStream;
-  mic?: MediaStream;
+interface RecorderResources {
   ctx?: AudioContext;
+  combined?: MediaStream;
 }
 
 export interface UseRecordingResult {
@@ -15,12 +30,75 @@ export interface UseRecordingResult {
   recError: string | null;
   recDurationMs: number;
   toggleSummon: () => void;
-  // Toast hook so the caller can show "Saved to Drive" etc.
-  // (kept simple: an event channel, not a managed-state toast)
   lastDriveUrl: string | null;
 }
 
-export function useRecording(name: string): UseRecordingResult {
+function collectTracksForRecording(room: Room): {
+  videoTrack: MediaStreamTrack | null;
+  audioTracks: MediaStreamTrack[];
+  description: string;
+} {
+  const lp = room.localParticipant;
+  const audioTracks: MediaStreamTrack[] = [];
+  let videoTrack: MediaStreamTrack | null = null;
+  const bits: string[] = [];
+
+  // Local mic
+  const micPub = lp.getTrackPublication(Track.Source.Microphone);
+  const micMs = micPub?.track?.mediaStreamTrack;
+  if (micMs) {
+    audioTracks.push(micMs);
+    bits.push('mic');
+  }
+
+  // Local screen share (video + its own audio if user picked "share tab audio")
+  const ssPub = lp.getTrackPublication(Track.Source.ScreenShare);
+  const ssMs = ssPub?.track?.mediaStreamTrack;
+  if (ssMs) {
+    videoTrack = ssMs;
+    bits.push('screen');
+  }
+  const ssaPub = lp.getTrackPublication(Track.Source.ScreenShareAudio);
+  const ssaMs = ssaPub?.track?.mediaStreamTrack;
+  if (ssaMs) {
+    audioTracks.push(ssaMs);
+    bits.push('screen-audio');
+  }
+
+  // Local camera (fallback video source if no screen share)
+  if (!videoTrack) {
+    const camPub = lp.getTrackPublication(Track.Source.Camera);
+    const camMs = camPub?.track?.mediaStreamTrack;
+    if (camMs) {
+      videoTrack = camMs;
+      bits.push('camera');
+    }
+  }
+
+  // Remote tracks
+  room.remoteParticipants.forEach((rp) => {
+    rp.audioTrackPublications.forEach((pub) => {
+      const t = pub.track?.mediaStreamTrack;
+      if (t) audioTracks.push(t);
+    });
+    if (!videoTrack) {
+      rp.videoTrackPublications.forEach((pub) => {
+        const t = pub.track?.mediaStreamTrack;
+        if (!videoTrack && t) {
+          videoTrack = t;
+          bits.push(`peer-${rp.identity.slice(0, 6)}-video`);
+        }
+      });
+    }
+  });
+
+  return { videoTrack, audioTracks, description: bits.join(' + ') || 'nothing' };
+}
+
+export function useRecording(
+  name: string,
+  roomRef: MutableRefObject<Room | null>
+): UseRecordingResult {
   const [summoned, setSummoned] = useState(false);
   const [recError, setRecError] = useState<string | null>(null);
   const [recStartAt, setRecStartAt] = useState<number | null>(null);
@@ -29,7 +107,7 @@ export function useRecording(name: string): UseRecordingResult {
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const streamsRef = useRef<RecorderStreams>({});
+  const resourcesRef = useRef<RecorderResources>({});
 
   useEffect(() => {
     if (recStartAt === null) return;
@@ -44,17 +122,11 @@ export function useRecording(name: string): UseRecordingResult {
         rec.stop();
       } catch {}
     }
-    const s = streamsRef.current;
+    const r = resourcesRef.current;
     try {
-      s.display?.getTracks().forEach((t) => t.stop());
+      r.ctx?.close();
     } catch {}
-    try {
-      s.mic?.getTracks().forEach((t) => t.stop());
-    } catch {}
-    try {
-      s.ctx?.close();
-    } catch {}
-    streamsRef.current = {};
+    resourcesRef.current = {};
     recorderRef.current = null;
     setSummoned(false);
     setRecStartAt(null);
@@ -62,90 +134,77 @@ export function useRecording(name: string): UseRecordingResult {
 
   const start = useCallback(async () => {
     setRecError(null);
-    let displayStream: MediaStream | null = null;
-    let micStream: MediaStream | null = null;
-    let ctx: AudioContext | null = null;
-
-    try {
-      displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 12, max: 15 } } as MediaTrackConstraints,
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      });
-    } catch (e: unknown) {
-      const err = e as { name?: string; message?: string };
-      if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') {
-        setRecError('Screen capture failed: ' + (err?.message ?? String(e)));
-      }
+    const room = roomRef.current;
+    if (!room) {
+      setRecError('Not connected to a room yet');
       return;
     }
 
-    try {
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-    } catch (e) {
-      console.warn('Mic capture failed, continuing without mic:', e);
+    const { videoTrack, audioTracks, description } = collectTracksForRecording(room);
+    if (!videoTrack && audioTracks.length === 0) {
+      setRecError(
+        'Nothing to record. Turn on your mic, camera, or screen share first.'
+      );
+      return;
     }
 
-    // Mix display + mic audio
+    // Build a mixed audio destination if we have any audio tracks.
     let mixedAudio: MediaStreamTrack | null = null;
-    try {
-      ctx = new AudioContext();
-      const dest = ctx.createMediaStreamDestination();
-      let hasAudio = false;
-      if (displayStream.getAudioTracks().length > 0) {
-        ctx
-          .createMediaStreamSource(new MediaStream(displayStream.getAudioTracks()))
-          .connect(dest);
-        hasAudio = true;
+    let ctx: AudioContext | null = null;
+    if (audioTracks.length > 0) {
+      try {
+        ctx = new AudioContext();
+        const dest = ctx.createMediaStreamDestination();
+        // De-dupe identical tracks (same MediaStreamTrack instance can show up
+        // in both screen-share audio and a remote subscription, theoretically)
+        const seen = new Set<string>();
+        for (const t of audioTracks) {
+          if (seen.has(t.id)) continue;
+          seen.add(t.id);
+          try {
+            ctx.createMediaStreamSource(new MediaStream([t])).connect(dest);
+          } catch (e) {
+            console.warn('failed to add audio source:', e);
+          }
+        }
+        mixedAudio = dest.stream.getAudioTracks()[0] ?? null;
+      } catch (e) {
+        console.warn('audio mix setup failed:', e);
       }
-      if (micStream && micStream.getAudioTracks().length > 0) {
-        ctx
-          .createMediaStreamSource(new MediaStream(micStream.getAudioTracks()))
-          .connect(dest);
-        hasAudio = true;
-      }
-      if (hasAudio) mixedAudio = dest.stream.getAudioTracks()[0] ?? null;
-    } catch (e) {
-      console.warn('Audio mix failed:', e);
     }
 
     const combined = new MediaStream();
-    displayStream.getVideoTracks().forEach((t) => combined.addTrack(t));
+    if (videoTrack) combined.addTrack(videoTrack);
     if (mixedAudio) combined.addTrack(mixedAudio);
 
-    const candidates = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm;codecs=h264,opus',
-      'video/webm',
-    ];
+    // Pick a MIME type matching what we actually have
+    const hasVideo = !!videoTrack;
+    const hasAudio = !!mixedAudio;
+    const candidates = hasVideo
+      ? [
+          'video/webm;codecs=vp9,opus',
+          'video/webm;codecs=vp8,opus',
+          'video/webm;codecs=h264,opus',
+          'video/webm',
+        ]
+      : ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
     const mimeType =
       candidates.find(
         (c) =>
           typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c)
-      ) ?? 'video/webm';
+      ) ?? (hasVideo ? 'video/webm' : 'audio/webm');
 
     let recorder: MediaRecorder;
     try {
-      recorder = new MediaRecorder(combined, {
+      const opts: MediaRecorderOptions = {
         mimeType,
-        videoBitsPerSecond: 250_000,
         audioBitsPerSecond: 48_000,
-      });
+      };
+      if (hasVideo) opts.videoBitsPerSecond = 250_000;
+      recorder = new MediaRecorder(combined, opts);
     } catch (e: unknown) {
       const err = e as { message?: string };
       setRecError('MediaRecorder failed: ' + (err?.message ?? String(e)));
-      displayStream.getTracks().forEach((t) => t.stop());
-      micStream?.getTracks().forEach((t) => t.stop());
       ctx?.close();
       return;
     }
@@ -158,8 +217,9 @@ export function useRecording(name: string): UseRecordingResult {
       const blob = new Blob(chunksRef.current, { type: mimeType });
       chunksRef.current = [];
 
+      const ext = hasVideo ? 'webm' : 'webm';
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `john-pork-${name || 'me'}-${stamp}.webm`;
+      const filename = `john-pork-${name || 'me'}-${stamp}.${ext}`;
 
       // 1) Always download locally
       const url = URL.createObjectURL(blob);
@@ -171,7 +231,7 @@ export function useRecording(name: string): UseRecordingResult {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
 
-      // 2) Best-effort Drive upload via resumable session (bypasses Vercel 4.5MB limit)
+      // 2) Best-effort Drive upload (resumable URL → direct PUT)
       try {
         const initRes = await fetch('/api/upload-recording', {
           method: 'POST',
@@ -188,8 +248,7 @@ export function useRecording(name: string): UseRecordingResult {
             console.warn('Drive init failed:', initRes.status, await initRes.text());
           return;
         }
-        const { uploadUrl, fileId, viewLink } = await initRes.json();
-        // PUT the blob directly to Google's resumable URL (no Vercel limit)
+        const { uploadUrl, fileId } = await initRes.json();
         if (uploadUrl) {
           const putRes = await fetch(uploadUrl, {
             method: 'PUT',
@@ -197,13 +256,11 @@ export function useRecording(name: string): UseRecordingResult {
             body: blob,
           });
           if (putRes.ok) {
-            // Drive returns the final file metadata
             const meta = (await putRes.json().catch(() => null)) as
               | { id?: string; webViewLink?: string }
               | null;
             const finalLink =
               meta?.webViewLink ??
-              viewLink ??
               (meta?.id ? `https://drive.google.com/file/d/${meta.id}/view` : null) ??
               (fileId ? `https://drive.google.com/file/d/${fileId}/view` : null);
             if (finalLink) setLastDriveUrl(finalLink);
@@ -216,25 +273,25 @@ export function useRecording(name: string): UseRecordingResult {
       }
     };
 
-    displayStream.getVideoTracks()[0].addEventListener('ended', () => stop());
+    // If the video track ends (e.g. user clicks Stop sharing on the browser pill
+    // for their screen share), stop the recording too.
+    if (videoTrack) {
+      videoTrack.addEventListener('ended', () => stop());
+    }
 
     recorder.start(1000);
     recorderRef.current = recorder;
-    streamsRef.current = {
-      display: displayStream,
-      mic: micStream ?? undefined,
-      ctx: ctx ?? undefined,
-    };
+    resourcesRef.current = { ctx: ctx ?? undefined, combined };
     setSummoned(true);
     setRecStartAt(Date.now());
-  }, [name, stop]);
+    console.log(`[john-pork] recording started — sources: ${description}`);
+  }, [name, roomRef, stop]);
 
   const toggleSummon = useCallback(() => {
     if (summoned) stop();
     else void start();
   }, [summoned, start, stop]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stop();
@@ -243,7 +300,6 @@ export function useRecording(name: string): UseRecordingResult {
   }, []);
 
   const recDurationMs = recStartAt ? Date.now() - recStartAt : 0;
-  // Reference tick so React re-renders on the interval (otherwise unused)
   void tick;
 
   return { summoned, recError, recDurationMs, toggleSummon, lastDriveUrl };
