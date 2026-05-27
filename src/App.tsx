@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
+  AudioPresets,
   Room,
   RoomEvent,
   Track,
@@ -459,7 +460,26 @@ export default function App() {
         if (!res.ok) throw new Error(`Token endpoint ${res.status}`);
         const { token, url } = await res.json();
 
-        room = new Room({ adaptiveStream: false, dynacast: false });
+        room = new Room({
+          adaptiveStream: false,
+          dynacast: false,
+          // Force browser-level voice DSP on the mic. Defaults are usually on
+          // but some browsers (and some user-media tweaks) flip them off.
+          audioCaptureDefaults: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+            sampleRate: 48000,
+          },
+          // Speech-tuned Opus + RED (loss-resilient redundancy) + DTX
+          // (don't transmit during silence) — better clarity, less bandwidth.
+          publishDefaults: {
+            audioPreset: AudioPresets.speech,
+            red: true,
+            dtx: true,
+          },
+        });
 
         room.on(RoomEvent.ParticipantConnected, () => {
           // Tell new arrival our position and avatar so they render us correctly
@@ -573,6 +593,25 @@ export default function App() {
           // Screen share: ALWAYS subscribe regardless of proximity (broadcast)
           if (pub.kind === Track.Kind.Video && pub.source === Track.Source.ScreenShare) {
             pub.setSubscribed(true);
+          }
+        });
+
+        // Krisp AI noise cancellation — lazy-loaded the first time the mic is
+        // published. Saves ~6 MB on initial bundle for users who never speak.
+        room.on(RoomEvent.LocalTrackPublished, async (pub) => {
+          if (pub.source !== Track.Source.Microphone || !pub.audioTrack) return;
+          try {
+            const { KrispNoiseFilter, isKrispNoiseFilterSupported } = await import(
+              '@livekit/krisp-noise-filter'
+            );
+            if (!isKrispNoiseFilterSupported()) {
+              console.warn('[krisp] not supported in this browser');
+              return;
+            }
+            await pub.audioTrack.setProcessor(KrispNoiseFilter());
+            console.log('[krisp] noise filter applied to mic');
+          } catch (e) {
+            console.warn('[krisp] failed to load/apply:', e);
           }
         });
 

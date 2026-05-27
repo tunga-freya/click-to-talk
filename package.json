@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@livekit/krisp-noise-filter": "^0.4.3",
     "google-auth-library": "^10.6.2",
     "livekit-client": "^2.5.10",
     "livekit-server-sdk": "^2.9.4",
