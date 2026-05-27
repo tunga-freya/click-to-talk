@@ -1010,6 +1010,9 @@ export default function App() {
           showHearingRing={!myZoneId}
         />
 
+        {/* John Pork sprite — appears next to me while recording */}
+        <JohnPorkSprite x={myPos.x} y={myPos.y} visible={johnPork.summoned} />
+
         {/* Other avatars */}
         {Array.from(peers.values()).map((p) => {
           const d = Math.hypot(myPos.x - p.x, myPos.y - p.y);
@@ -1140,14 +1143,11 @@ export default function App() {
             active={screenShareOn}
           />
 
-          {/* Record — dark capsule with chevron */}
-          <CapsuleButton
-            variant="dark"
-            icon={
-              <span className="w-3 h-3 rounded-full border-2 border-white inline-block" />
-            }
-            title="Record (coming soon)"
-            disabled
+          {/* John Pork — start/stop low-bitrate screen + audio recording */}
+          <JohnPorkButton
+            summoned={johnPork.summoned}
+            onClick={johnPork.toggleSummon}
+            durationMs={johnPork.recDurationMs}
           />
 
           {/* Emoji — plain dark circle */}
