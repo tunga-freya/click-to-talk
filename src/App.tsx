@@ -1000,7 +1000,7 @@ export default function App() {
           );
         })}
 
-        {/* My avatar (with hearing ring only when in open floor) */}
+        {/* My avatar — pixel character with walk animation */}
         <Avatar
           x={myPos.x}
           y={myPos.y}
@@ -1008,6 +1008,12 @@ export default function App() {
           color="#3b82f6"
           isMe
           showHearingRing={!myZoneId}
+          avatarCfg={myAvatar}
+          dir={myDir}
+          walking={myWalking}
+          hasCamera={cameraOn}
+          isScreenSharing={screenShareOn}
+          peerId={myIdentityRef.current}
         />
 
         {/* John Pork sprite — appears next to me while recording */}
@@ -1018,6 +1024,7 @@ export default function App() {
           const d = Math.hypot(myPos.x - p.x, myPos.y - p.y);
           const near = d < HEARING_RADIUS;
           const peerZone = getZone(getZoneId(p.x, p.y));
+          const cfg = peerAvatars.get(p.identity) ?? DEFAULT_AVATAR;
           return (
             <Avatar
               key={p.identity}
@@ -1028,6 +1035,12 @@ export default function App() {
               near={near}
               zoneName={peerZone?.name ?? null}
               highlight={highlightPeerId === p.identity}
+              avatarCfg={cfg}
+              dir={p.dir ?? 'right'}
+              walking={p.walking ?? false}
+              hasCamera={peerCams.has(p.identity)}
+              isScreenSharing={peerShares.has(p.identity)}
+              peerId={p.identity}
               onClick={() => setWaveMenuFor(waveMenuFor === p.identity ? null : p.identity)}
               menuOpen={waveMenuFor === p.identity}
               onCloseMenu={() => setWaveMenuFor(null)}
@@ -1036,6 +1049,7 @@ export default function App() {
                 setWaveMenuFor(null);
               }}
               onLocate={() => locateOnMap(p.identity)}
+              onViewScreen={() => setShareViewerPeer(p.identity)}
             />
           );
         })}
@@ -1238,8 +1252,74 @@ export default function App() {
           <span className="font-medium">{waveToast.name} waved at you</span>
         </div>
       )}
+
+      {/* Camera permission / share error toast */}
+      {camError && (
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 bg-red-500 text-white px-5 py-3 rounded-lg shadow-2xl flex items-center gap-3 z-40 max-w-md">
+          <span>⚠️</span>
+          <span className="font-medium text-sm">{camError}</span>
+          <button onClick={() => setCamError(null)} className="ml-2 text-white/70 hover:text-white">×</button>
+        </div>
+      )}
+
+      {/* Local camera preview (PiP) */}
+      {cameraOn && (
+        <div className="fixed bottom-20 right-4 z-40 w-48 h-36 rounded-xl overflow-hidden bg-black ring-2 ring-emerald-400 shadow-2xl">
+          <LocalCameraPreview roomRef={roomRef} />
+          <div className="absolute bottom-1 left-1 right-1 text-[10px] text-white/80 text-center bg-black/50 rounded-md px-1 py-0.5">
+            You (camera on)
+          </div>
+        </div>
+      )}
+
+      {/* Screen share viewer */}
+      {shareViewerPeer && (
+        <ScreenShareViewer
+          peerId={shareViewerPeer}
+          peerName={peers.get(shareViewerPeer)?.name ?? 'Someone'}
+          onClose={() => setShareViewerPeer(null)}
+        />
+      )}
+
+      {/* Avatar editor */}
+      {editorOpen && (
+        <AvatarEditor
+          initial={myAvatar}
+          name={name}
+          onSave={saveAvatar}
+          onClose={() => setEditorOpen(false)}
+        />
+      )}
     </div>
   );
+}
+
+// ──────────────────────────────────────────────
+// LocalCameraPreview — attaches local camera track to a <video>
+// ──────────────────────────────────────────────
+function LocalCameraPreview({ roomRef }: { roomRef: React.RefObject<Room | null> }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const target = ref.current;
+    if (!target) return;
+    const attach = () => {
+      const r = roomRef.current;
+      if (!r) return;
+      const pub = r.localParticipant.getTrackPublication(Track.Source.Camera);
+      const track = pub?.track;
+      if (track && 'mediaStream' in track) {
+        const stream = (track as any).mediaStream as MediaStream | undefined;
+        if (stream && target.srcObject !== stream) {
+          target.srcObject = stream;
+          target.play().catch(() => {});
+        }
+      }
+    };
+    attach();
+    const id = window.setInterval(attach, 500);
+    return () => window.clearInterval(id);
+  }, [roomRef]);
+  return <video ref={ref} autoPlay muted playsInline className="w-full h-full object-cover" />;
 }
 
 // ──────────────────────────────────────────────
@@ -1584,16 +1664,24 @@ interface AvatarProps {
   highlight?: boolean;
   showHearingRing?: boolean;
   zoneName?: string | null;
+  avatarCfg?: AvatarConfig;
+  dir?: 'left' | 'right';
+  walking?: boolean;
+  hasCamera?: boolean;
+  isScreenSharing?: boolean;
+  peerId?: string;
   onClick?: () => void;
   menuOpen?: boolean;
   onWave?: () => void;
   onLocate?: () => void;
   onCloseMenu?: () => void;
+  onViewScreen?: () => void;
 }
 
 function Avatar({
   x, y, name, color, isMe, near, highlight, showHearingRing, zoneName,
-  onClick, menuOpen, onWave, onLocate, onCloseMenu,
+  avatarCfg, dir = 'right', walking = false, hasCamera, isScreenSharing, peerId,
+  onClick, menuOpen, onWave, onLocate, onCloseMenu, onViewScreen,
 }: AvatarProps) {
   return (
     <div
@@ -1636,16 +1724,53 @@ function Avatar({
         />
       )}
 
+      {/* Video tile above head, or pixel character */}
+      {hasCamera && peerId ? (
+        <div
+          className="absolute left-1/2 -translate-x-1/2 -top-14 w-16 h-12 rounded-md overflow-hidden bg-black ring-2 ring-emerald-400 shadow-lg"
+          style={{ pointerEvents: 'none' }}
+        >
+          <PeerVideo peerId={peerId} kind={isMe ? 'self-cam' : 'cam'} />
+        </div>
+      ) : null}
+
+      {/* Screen-share indicator badge above head */}
+      {isScreenSharing && (
+        <button
+          onClick={isMe ? undefined : onViewScreen}
+          className={`absolute left-1/2 -translate-x-1/2 -top-7 px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center gap-1 z-10 ${
+            isMe
+              ? 'bg-emerald-500 text-emerald-950 cursor-default'
+              : 'bg-emerald-500 text-emerald-950 hover:bg-emerald-400 cursor-pointer'
+          }`}
+          title={isMe ? 'You are sharing your screen' : 'View screen share'}
+        >
+          📺 {isMe ? 'Sharing' : 'View'}
+        </button>
+      )}
+
       <button
         type="button"
         onClick={onClick}
         disabled={!onClick}
-        className={`relative w-full h-full rounded-full flex items-center justify-center text-white text-xl font-bold shadow-lg transition ${
+        className={`relative w-full h-full flex items-center justify-center transition ${
           onClick ? 'hover:scale-110 cursor-pointer' : 'cursor-default'
-        } ${near ? 'ring-2 ring-green-300/70' : isMe ? 'ring-2 ring-blue-300/80' : ''}`}
-        style={{ backgroundColor: color }}
+        } ${highlight ? '' : ''}`}
+        style={{ background: 'transparent' }}
       >
-        {name[0]?.toUpperCase()}
+        {avatarCfg ? (
+          <PixelCharacter cfg={avatarCfg} dir={dir} walking={walking} scale={1.1} />
+        ) : (
+          // Legacy fallback (used by inline avatar pills in editor / menus)
+          <div
+            className={`w-full h-full rounded-full flex items-center justify-center text-white text-xl font-bold shadow-lg ${
+              near ? 'ring-2 ring-green-300/70' : isMe ? 'ring-2 ring-blue-300/80' : ''
+            }`}
+            style={{ backgroundColor: color }}
+          >
+            {name[0]?.toUpperCase()}
+          </div>
+        )}
       </button>
 
       {/* Gather-style name pill: small, dark bg, green dot prefix */}
@@ -1942,6 +2067,600 @@ function ChatView({
           Send
         </button>
       </form>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────
+// PixelCharacter — CSS-rendered 2D human, customizable + animated.
+// 32×48 base, scaled. No sprite sheets — pure divs.
+// ──────────────────────────────────────────────────────────────
+function PixelCharacter({
+  cfg,
+  dir,
+  walking,
+  scale = 1,
+}: {
+  cfg: AvatarConfig;
+  dir: 'left' | 'right';
+  walking: boolean;
+  scale?: number;
+}) {
+  const [frame, setFrame] = useState(0);
+
+  useEffect(() => {
+    if (!walking) {
+      setFrame(0);
+      return;
+    }
+    const id = window.setInterval(() => setFrame((f) => (f + 1) % 4), 140);
+    return () => window.clearInterval(id);
+  }, [walking]);
+
+  // frame: 0=neutral, 1=left forward, 2=neutral, 3=right forward
+  const legSwing = frame === 1 ? -1 : frame === 3 ? 1 : 0;
+  const armSwing = frame === 1 ? 1 : frame === 3 ? -1 : 0;
+  const bodyBob = (frame === 1 || frame === 3) ? -1 : 0;
+
+  const skin = SKIN_COLORS[cfg.skin];
+  const skinShadow = darken(skin, 0.18);
+  const topShadow = darken(cfg.top, 0.25);
+  const bottomShadow = darken(cfg.bottom, 0.25);
+  const hairShadow = darken(cfg.hair, 0.3);
+
+  // Base box is 32 wide × 48 tall. Scale via transform to keep clean pixels.
+  return (
+    <div
+      style={{
+        width: 32 * scale,
+        height: 48 * scale,
+        position: 'relative',
+        transform: dir === 'left' ? `scaleX(-1)` : undefined,
+        imageRendering: 'pixelated' as any,
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: 32,
+          height: 48,
+          transform: `scale(${scale}) translateY(${bodyBob}px)`,
+          transformOrigin: 'top left',
+        }}
+      >
+        {/* Shadow under feet */}
+        <div
+          style={{
+            position: 'absolute',
+            left: 8,
+            top: 46,
+            width: 16,
+            height: 3,
+            borderRadius: '50%',
+            background: 'rgba(0,0,0,0.35)',
+            filter: 'blur(0.5px)',
+          }}
+        />
+
+        {/* Legs */}
+        <div
+          style={{
+            position: 'absolute',
+            left: 11,
+            top: 36 - legSwing,
+            width: 4,
+            height: 10 + legSwing,
+            background: cfg.bottom,
+            borderRight: `1px solid ${bottomShadow}`,
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            left: 17,
+            top: 36 + legSwing,
+            width: 4,
+            height: 10 - legSwing,
+            background: cfg.bottom,
+            borderRight: `1px solid ${bottomShadow}`,
+          }}
+        />
+        {/* Shoes */}
+        <div
+          style={{
+            position: 'absolute',
+            left: 10,
+            top: 45 - legSwing,
+            width: 6,
+            height: 3,
+            background: cfg.shoes,
+            borderRadius: 1,
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            left: 16,
+            top: 45 + legSwing,
+            width: 6,
+            height: 3,
+            background: cfg.shoes,
+            borderRadius: 1,
+          }}
+        />
+
+        {/* Body (top / shirt) */}
+        <div
+          style={{
+            position: 'absolute',
+            left: 9,
+            top: 22,
+            width: 14,
+            height: 15,
+            background: cfg.top,
+            borderRadius: '2px 2px 0 0',
+            boxShadow: `inset -2px 0 0 ${topShadow}`,
+          }}
+        />
+        {/* Top style accents */}
+        {cfg.topStyle === 'sweater' && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 9,
+              top: 31,
+              width: 14,
+              height: 2,
+              background: topShadow,
+            }}
+          />
+        )}
+        {cfg.topStyle === 'longsleeve' && (
+          <>
+            <div style={{ position: 'absolute', left: 6, top: 24, width: 3, height: 10, background: cfg.top }} />
+            <div style={{ position: 'absolute', left: 23, top: 24, width: 3, height: 10, background: cfg.top }} />
+          </>
+        )}
+
+        {/* Arms (skin) — swing slightly when walking */}
+        <div
+          style={{
+            position: 'absolute',
+            left: 6,
+            top: 22 + armSwing,
+            width: 3,
+            height: cfg.topStyle === 'longsleeve' ? 4 : 12,
+            background: skin,
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            left: 23,
+            top: 22 - armSwing,
+            width: 3,
+            height: cfg.topStyle === 'longsleeve' ? 4 : 12,
+            background: skin,
+          }}
+        />
+
+        {/* Neck */}
+        <div
+          style={{
+            position: 'absolute',
+            left: 14,
+            top: 20,
+            width: 4,
+            height: 3,
+            background: skinShadow,
+          }}
+        />
+
+        {/* Head */}
+        <div
+          style={{
+            position: 'absolute',
+            left: 10,
+            top: 8,
+            width: 12,
+            height: 13,
+            background: skin,
+            borderRadius: '3px 3px 4px 4px',
+            boxShadow: `inset -2px 0 0 ${skinShadow}`,
+          }}
+        />
+
+        {/* Eyes */}
+        <div style={{ position: 'absolute', left: 13, top: 14, width: 2, height: 2, background: '#1a1a1a' }} />
+        <div style={{ position: 'absolute', left: 18, top: 14, width: 2, height: 2, background: '#1a1a1a' }} />
+
+        {/* Mouth */}
+        <div style={{ position: 'absolute', left: 14, top: 18, width: 4, height: 1, background: '#5b2f1a', opacity: 0.5 }} />
+
+        {/* Hair */}
+        {cfg.hairStyle !== 'bald' && (
+          <>
+            <div
+              style={{
+                position: 'absolute',
+                left: 9,
+                top: 6,
+                width: 14,
+                height: 6,
+                background: cfg.hair,
+                borderRadius: '5px 5px 0 0',
+                boxShadow: `inset -2px 0 0 ${hairShadow}`,
+              }}
+            />
+            {cfg.hairStyle === 'long' && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: 8,
+                  top: 9,
+                  width: 16,
+                  height: 9,
+                  background: cfg.hair,
+                  borderRadius: '0 0 6px 6px',
+                  boxShadow: `inset -2px 0 0 ${hairShadow}`,
+                  zIndex: -1,
+                }}
+              />
+            )}
+            {cfg.hairStyle === 'bun' && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: 13,
+                  top: 3,
+                  width: 6,
+                  height: 5,
+                  background: cfg.hair,
+                  borderRadius: '50%',
+                }}
+              />
+            )}
+          </>
+        )}
+
+        {/* Hat (on top of hair) */}
+        {cfg.hat === 'cap' && (
+          <>
+            <div
+              style={{
+                position: 'absolute',
+                left: 9,
+                top: 4,
+                width: 14,
+                height: 4,
+                background: cfg.hatColor,
+                borderRadius: '4px 4px 0 0',
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                left: 17,
+                top: 7,
+                width: 8,
+                height: 2,
+                background: cfg.hatColor,
+              }}
+            />
+          </>
+        )}
+        {cfg.hat === 'beanie' && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 9,
+              top: 3,
+              width: 14,
+              height: 6,
+              background: cfg.hatColor,
+              borderRadius: '6px 6px 0 0',
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function darken(hex: string, amt: number): string {
+  const h = hex.replace('#', '');
+  const r = Math.max(0, Math.round(parseInt(h.slice(0, 2), 16) * (1 - amt)));
+  const g = Math.max(0, Math.round(parseInt(h.slice(2, 4), 16) * (1 - amt)));
+  const b = Math.max(0, Math.round(parseInt(h.slice(4, 6), 16) * (1 - amt)));
+  return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
+}
+
+// ──────────────────────────────────────────────────────────────
+// PeerVideo — renders a remote/local video track into a <video>.
+// Pulls the source from the hidden <video data-vid="..."> attached
+// by LiveKit's track.attach() in TrackSubscribed.
+// ──────────────────────────────────────────────────────────────
+function PeerVideo({
+  peerId,
+  kind,
+  className,
+}: {
+  peerId: string;
+  kind: 'cam' | 'share' | 'self-cam' | 'self-share';
+  className?: string;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const target = videoRef.current;
+    if (!target) return;
+
+    const findAndAttach = () => {
+      // For self, look for our own LiveKit local track
+      // For peers, find the hidden <video data-vid="...">
+      const wantedVid = kind === 'cam' ? `cam-${peerId}`
+                     : kind === 'share' ? `share-${peerId}`
+                     : kind === 'self-cam' ? `self-cam`
+                     : `self-share`;
+      const src = document.querySelector<HTMLVideoElement>(`video[data-vid="${wantedVid}"]`);
+      if (src && src.srcObject && target.srcObject !== src.srcObject) {
+        target.srcObject = src.srcObject;
+        target.play().catch(() => {});
+      }
+    };
+    findAndAttach();
+    // Re-attach every 500ms in case the source appears late (track publish race)
+    const id = window.setInterval(findAndAttach, 500);
+    return () => window.clearInterval(id);
+  }, [peerId, kind]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      muted
+      playsInline
+      className={className ?? 'w-full h-full object-cover'}
+    />
+  );
+}
+
+// ──────────────────────────────────────────────────────────────
+// AvatarEditor — Gather-style customization modal
+// ──────────────────────────────────────────────────────────────
+function AvatarEditor({
+  initial,
+  name,
+  onSave,
+  onClose,
+}: {
+  initial: AvatarConfig;
+  name: string;
+  onSave: (cfg: AvatarConfig) => void;
+  onClose: () => void;
+}) {
+  const [cfg, setCfg] = useState<AvatarConfig>(initial);
+  const [tab, setTab] = useState<'base' | 'clothing' | 'accessories'>('base');
+  const [clothingSub, setClothingSub] = useState<'top' | 'bottom'>('top');
+
+  const update = <K extends keyof AvatarConfig>(k: K, v: AvatarConfig[K]) =>
+    setCfg((c) => ({ ...c, [k]: v }));
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+      <div className="bg-[#1a2236] rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl text-white">
+        {/* Header with preview */}
+        <div className="relative p-6 pb-2 flex flex-col items-center" style={{ background: '#22304b' }}>
+          <button
+            onClick={onClose}
+            className="absolute top-3 right-3 text-white/70 hover:text-white text-2xl leading-none px-2"
+            title="Close"
+          >×</button>
+          <div className="absolute top-3 left-3 bg-[#0e1320]/80 px-3 py-1 rounded-md text-sm font-semibold">{name}</div>
+          <div className="my-4" style={{ transform: 'scale(2.5)', transformOrigin: 'center' }}>
+            <PixelCharacter cfg={cfg} dir="right" walking={false} scale={1} />
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-white/10 px-4">
+          {([
+            ['base', 'Base'], ['clothing', 'Clothing'], ['accessories', 'Accessories'],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={`px-4 py-3 text-sm font-medium border-b-2 transition ${
+                tab === id ? 'text-white border-emerald-400' : 'text-gray-400 border-transparent hover:text-white'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Body */}
+        <div className="p-5 max-h-[40vh] overflow-y-auto">
+          {tab === 'base' && (
+            <>
+              <SectionLabel>Skin</SectionLabel>
+              <div className="flex gap-2 flex-wrap mb-4">
+                {(['pale', 'light', 'tan', 'brown', 'dark'] as Skin[]).map((s) => (
+                  <Swatch
+                    key={s}
+                    color={SKIN_COLORS[s]}
+                    selected={cfg.skin === s}
+                    onClick={() => update('skin', s)}
+                    label={s}
+                  />
+                ))}
+              </div>
+              <SectionLabel>Hair Color</SectionLabel>
+              <PalettePicker value={cfg.hair} onChange={(v) => update('hair', v)} />
+              <SectionLabel>Hair Style</SectionLabel>
+              <div className="flex gap-2 flex-wrap mb-2">
+                {(['short', 'long', 'bun', 'bald'] as HairStyle[]).map((s) => (
+                  <ChipButton key={s} selected={cfg.hairStyle === s} onClick={() => update('hairStyle', s)}>
+                    {s}
+                  </ChipButton>
+                ))}
+              </div>
+            </>
+          )}
+
+          {tab === 'clothing' && (
+            <>
+              <div className="flex gap-2 mb-4">
+                {(['top', 'bottom'] as const).map((s) => (
+                  <ChipButton key={s} selected={clothingSub === s} onClick={() => setClothingSub(s)}>
+                    {s === 'top' ? 'Top' : 'Bottom'}
+                  </ChipButton>
+                ))}
+              </div>
+              {clothingSub === 'top' ? (
+                <>
+                  <SectionLabel>Top Style</SectionLabel>
+                  <div className="flex gap-2 flex-wrap mb-3">
+                    {(['tshirt', 'longsleeve', 'sweater'] as TopStyle[]).map((s) => (
+                      <ChipButton key={s} selected={cfg.topStyle === s} onClick={() => update('topStyle', s)}>
+                        {s}
+                      </ChipButton>
+                    ))}
+                  </div>
+                  <SectionLabel>Top Color</SectionLabel>
+                  <PalettePicker value={cfg.top} onChange={(v) => update('top', v)} />
+                </>
+              ) : (
+                <>
+                  <SectionLabel>Bottom Style</SectionLabel>
+                  <div className="flex gap-2 flex-wrap mb-3">
+                    {(['pants', 'shorts'] as BottomStyle[]).map((s) => (
+                      <ChipButton key={s} selected={cfg.bottomStyle === s} onClick={() => update('bottomStyle', s)}>
+                        {s}
+                      </ChipButton>
+                    ))}
+                  </div>
+                  <SectionLabel>Bottom Color</SectionLabel>
+                  <PalettePicker value={cfg.bottom} onChange={(v) => update('bottom', v)} />
+                  <SectionLabel>Shoes Color</SectionLabel>
+                  <PalettePicker value={cfg.shoes} onChange={(v) => update('shoes', v)} />
+                </>
+              )}
+            </>
+          )}
+
+          {tab === 'accessories' && (
+            <>
+              <SectionLabel>Hat</SectionLabel>
+              <div className="flex gap-2 flex-wrap mb-3">
+                {(['none', 'cap', 'beanie'] as HatStyle[]).map((s) => (
+                  <ChipButton key={s} selected={cfg.hat === s} onClick={() => update('hat', s)}>
+                    {s}
+                  </ChipButton>
+                ))}
+              </div>
+              {cfg.hat !== 'none' && (
+                <>
+                  <SectionLabel>Hat Color</SectionLabel>
+                  <PalettePicker value={cfg.hatColor} onChange={(v) => update('hatColor', v)} />
+                </>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between p-4 border-t border-white/10 bg-[#161e2f]">
+          <button
+            onClick={onClose}
+            className="bg-[#2a334a] hover:bg-[#36405d] text-white font-medium px-6 py-2.5 rounded-lg text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => { onSave(cfg); onClose(); }}
+            className="bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-semibold px-6 py-2.5 rounded-lg text-sm"
+          >
+            Finish Editing
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <div className="text-xs uppercase tracking-wide text-gray-400 font-semibold mt-1 mb-2">{children}</div>;
+}
+
+function Swatch({
+  color, selected, onClick, label,
+}: { color: string; selected: boolean; onClick: () => void; label?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      className={`w-8 h-8 rounded-full border-2 transition ${
+        selected ? 'border-white scale-110' : 'border-transparent hover:border-white/40'
+      }`}
+      style={{ backgroundColor: color }}
+    />
+  );
+}
+
+function PalettePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="flex gap-2 flex-wrap mb-4">
+      {PALETTE.map((c) => (
+        <Swatch key={c} color={c} selected={value.toLowerCase() === c.toLowerCase()} onClick={() => onChange(c)} />
+      ))}
+    </div>
+  );
+}
+
+function ChipButton({
+  selected, onClick, children,
+}: { selected: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-1.5 rounded-full text-sm font-medium transition ${
+        selected ? 'bg-white text-[#0e1320]' : 'bg-[#2a334a] text-gray-300 hover:bg-[#36405d]'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────
+// ScreenShareViewer — fullscreen overlay to watch someone's share
+// ──────────────────────────────────────────────────────────────
+function ScreenShareViewer({
+  peerId,
+  peerName,
+  onClose,
+}: {
+  peerId: string;
+  peerName: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[80] bg-black/95 flex flex-col">
+      <div className="flex items-center justify-between px-4 py-2 bg-[#0e1320]/95 text-white border-b border-white/10">
+        <div className="flex items-center gap-2">
+          <span>📺</span>
+          <span className="font-medium text-sm">{peerName}'s screen</span>
+        </div>
+        <button onClick={onClose} className="text-gray-400 hover:text-white px-3 py-1 rounded-md hover:bg-white/5 text-sm">
+          Close
+        </button>
+      </div>
+      <div className="flex-1 flex items-center justify-center p-4">
+        <PeerVideo peerId={peerId} kind="share" className="max-w-full max-h-full object-contain" />
+      </div>
     </div>
   );
 }
