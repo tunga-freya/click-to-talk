@@ -1272,11 +1272,19 @@ export default function App() {
         </div>
       )}
 
-      {/* Screen share viewer */}
+      {/* Screen share viewer — Gather-style: left video column + main share area */}
       {shareViewerPeer && (
-        <ScreenShareViewer
-          peerId={shareViewerPeer}
-          peerName={peers.get(shareViewerPeer)?.name ?? 'Someone'}
+        <ScreenShareLayout
+          sharerPeerId={shareViewerPeer}
+          sharerName={peers.get(shareViewerPeer)?.name ?? 'Someone'}
+          peers={peers}
+          peerCams={peerCams}
+          selfName={name}
+          selfId={myIdentityRef.current}
+          cameraOn={cameraOn}
+          muted={muted}
+          selfVideoRef={selfVideoRef}
+          colorFor={colorFor}
           onClose={() => setShareViewerPeer(null)}
         />
       )}
@@ -2636,30 +2644,144 @@ function ChipButton({
 }
 
 // ──────────────────────────────────────────────────────────────
-// ScreenShareViewer — fullscreen overlay to watch someone's share
+// ScreenShareLayout — Gather-style: left video column + main share area.
+// Top bar (48px) + Bottom bar (64px) remain visible above/below.
 // ──────────────────────────────────────────────────────────────
-function ScreenShareViewer({
-  peerId,
-  peerName,
+function ScreenShareLayout({
+  sharerPeerId,
+  sharerName,
+  peers,
+  peerCams,
+  selfName,
+  selfId,
+  cameraOn,
+  muted,
+  selfVideoRef,
+  colorFor,
   onClose,
 }: {
-  peerId: string;
-  peerName: string;
+  sharerPeerId: string;
+  sharerName: string;
+  peers: Map<string, PeerInfo>;
+  peerCams: Set<string>;
+  selfName: string;
+  selfId: string;
+  cameraOn: boolean;
+  muted: boolean;
+  selfVideoRef: React.RefObject<HTMLVideoElement>;
+  colorFor: (id: string) => string;
   onClose: () => void;
 }) {
+  // Build the list of tiles for the left column: self + every peer that's currently in the
+  // app (the share is being shown because they're audible/in-proximity, so showing all
+  // remote participants reads true to Gather's layout).
+  const peerList = Array.from(peers.values());
+
   return (
-    <div className="fixed inset-0 z-[80] bg-black/95 flex flex-col">
-      <div className="flex items-center justify-between px-4 py-2 bg-[#0e1320]/95 text-white border-b border-white/10">
-        <div className="flex items-center gap-2">
-          <span>📺</span>
-          <span className="font-medium text-sm">{peerName}'s screen</span>
-        </div>
-        <button onClick={onClose} className="text-gray-400 hover:text-white px-3 py-1 rounded-md hover:bg-white/5 text-sm">
-          Close
-        </button>
+    <div
+      className="fixed left-0 right-0 z-40 flex"
+      style={{ top: 48, bottom: 64 }}
+    >
+      {/* Left video column */}
+      <div className="w-[140px] flex-shrink-0 bg-[#0b1220] p-2 flex flex-col gap-2 overflow-y-auto border-r border-white/5">
+        {/* Self tile */}
+        <ShareTile
+          name={selfName}
+          color={colorFor(selfId)}
+          cameraOn={cameraOn}
+          muted={muted}
+          isMe
+          selfVideoRef={selfVideoRef}
+        />
+        {/* Peer tiles */}
+        {peerList.map((p) => (
+          <ShareTile
+            key={p.identity}
+            peerId={p.identity}
+            name={p.name}
+            color={colorFor(p.identity)}
+            cameraOn={peerCams.has(p.identity)}
+          />
+        ))}
       </div>
-      <div className="flex-1 flex items-center justify-center p-4">
-        <PeerVideo peerId={peerId} kind="share" className="max-w-full max-h-full object-contain" />
+
+      {/* Main share area */}
+      <div className="flex-1 bg-[#0a0d14] relative flex items-center justify-center">
+        {/* Header strip */}
+        <div className="absolute top-0 left-0 right-0 px-4 py-2 bg-black/40 backdrop-blur-sm text-white flex items-center justify-between text-sm pointer-events-none">
+          <div className="flex items-center gap-2">
+            <span>📺</span>
+            <span className="font-medium">{sharerName}'s screen</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="pointer-events-auto text-gray-300 hover:text-white px-3 py-1 rounded-md hover:bg-white/10 text-xs"
+            title="Hide share viewer (does not stop the share)"
+          >
+            Hide
+          </button>
+        </div>
+        <PeerVideo
+          peerId={sharerPeerId}
+          kind="share"
+          className="max-w-full max-h-full object-contain"
+        />
+      </div>
+    </div>
+  );
+}
+
+// One participant tile in the left column of the screen-share layout.
+function ShareTile({
+  peerId,
+  name,
+  color,
+  cameraOn,
+  muted,
+  isMe,
+  selfVideoRef,
+}: {
+  peerId?: string;
+  name: string;
+  color: string;
+  cameraOn: boolean;
+  muted?: boolean;
+  isMe?: boolean;
+  selfVideoRef?: React.RefObject<HTMLVideoElement>;
+}) {
+  return (
+    <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-[#0e1320] flex items-center justify-center">
+      {cameraOn ? (
+        isMe ? (
+          <video
+            ref={selfVideoRef}
+            autoPlay
+            muted
+            playsInline
+            className="absolute inset-0 w-full h-full object-cover"
+            style={{ transform: 'scaleX(-1)' }}
+          />
+        ) : (
+          peerId && (
+            <PeerVideo
+              peerId={peerId}
+              kind="cam"
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+          )
+        )
+      ) : (
+        <div
+          className="absolute inset-0 flex items-center justify-center text-white text-xl font-bold"
+          style={{ backgroundColor: color }}
+        >
+          {name[0]?.toUpperCase()}
+        </div>
+      )}
+      {/* Name label */}
+      <div className="absolute left-1.5 bottom-1.5 flex items-center gap-1 bg-black/55 backdrop-blur px-1.5 py-0.5 rounded-md text-white text-[10px] font-medium">
+        {muted && <span>🔇</span>}
+        <span className="truncate max-w-[100px]">{name}{isMe ? ' (you)' : ''}</span>
       </div>
     </div>
   );
